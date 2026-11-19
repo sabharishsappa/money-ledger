@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">Money Ledger</string>
+    <string name="tab_transactions">Trans.</string>
+    <string name="tab_stats">Stats</string>
+    <string name="tab_accounts">Accounts</string>
+    <string name="tab_more">More</string>
+    <string name="sign_in_with_google">Sign in with Google</string>
+    <string name="auth_subtitle">Track every account, expense, transfer, and net worth in real time with secure cloud sync.</string>
+    <string name="income_label">Income</string>
+    <string name="expenses_label">Expenses</string>
+    <string name="expense_label">Expense</string>
+    <string name="transfer_label">Transfer</string>
+    <string name="total_label">Total</string>
+    <string name="assets_label">Assets</string>
+    <string name="liabilities_label">Liabilities</string>
+    <string name="save_label">Save</string>
+    <string name="continue_label">Continue</string>
+    <string name="settings_title">Settings</string>
+    <string name="configuration_title">Configuration</string>
+</resources>

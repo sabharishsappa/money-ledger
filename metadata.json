@@ -1,0 +1,6 @@
+{
+  "name": "Money Ledger",
+  "description": "Personal finance, multi-account ledger, expense tracking, and analytics app with real-time cloud sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

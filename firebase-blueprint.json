@@ -1,0 +1,155 @@
+{
+  "entities": {
+    "UserSettings": {
+      "title": "UserSettings",
+      "description": "Per-user configuration and ledger preferences.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID" },
+        "mainCurrencyCode": { "type": "string", "enum": ["INR", "USD", "EUR", "GBP"] },
+        "mainCurrencySymbol": { "type": "string" },
+        "subcategoryEnabled": { "type": "boolean" },
+        "startScreen": { "type": "string", "enum": ["DAILY", "CALENDAR"] },
+        "monthlyStartDate": { "type": "integer" },
+        "weeklyStartDay": { "type": "string", "enum": ["MONDAY", "SUNDAY"] },
+        "seeded": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp" }
+      },
+      "required": ["userId", "mainCurrencyCode", "mainCurrencySymbol", "subcategoryEnabled", "startScreen", "monthlyStartDate", "weeklyStartDay", "seeded", "createdAt", "updatedAt"]
+    },
+    "AccountGroup": {
+      "title": "AccountGroup",
+      "description": "Category group for organizing financial accounts (e.g. Cash, Banks, Investments, Loans).",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "groupType": { "type": "string", "enum": ["ASSET", "LIABILITY"] },
+        "sortOrder": { "type": "integer" },
+        "archived": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "name", "groupType", "sortOrder", "archived", "createdAt", "updatedAt"]
+    },
+    "Account": {
+      "title": "Account",
+      "description": "Individual financial account belonging to an account group.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "groupId": { "type": "string" },
+        "name": { "type": "string" },
+        "initialBalance": { "type": "number" },
+        "accountType": { "type": "string", "enum": ["ASSET", "LIABILITY"] },
+        "note": { "type": "string" },
+        "sortOrder": { "type": "integer" },
+        "archived": { "type": "boolean" },
+        "includeInNetWorth": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "groupId", "name", "initialBalance", "accountType", "sortOrder", "archived", "createdAt", "updatedAt"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Income or Expense category with optional subcategories and color.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["INCOME", "EXPENSE"] },
+        "colorHex": { "type": "string" },
+        "subcategories": { "type": "array" },
+        "sortOrder": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "name", "type", "colorHex", "subcategories", "sortOrder", "createdAt", "updatedAt"]
+    },
+    "LedgerTransaction": {
+      "title": "LedgerTransaction",
+      "description": "A single income, expense, or account transfer ledger entry.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "type": { "type": "string", "enum": ["INCOME", "EXPENSE", "TRANSFER"] },
+        "amount": { "type": "number" },
+        "feeAmount": { "type": "number" },
+        "epochDay": { "type": "integer" },
+        "timestampMillis": { "type": "integer" },
+        "accountId": { "type": "string" },
+        "toAccountId": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "subcategory": { "type": "string" },
+        "note": { "type": "string" },
+        "tagging": { "type": "string" },
+        "description": { "type": "string" },
+        "tags": { "type": "array" },
+        "favorite": { "type": "boolean" },
+        "repeatFrequency": { "type": "string", "enum": ["NONE", "DAILY", "WEEKLY", "MONTHLY", "YEARLY"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "type", "amount", "feeAmount", "epochDay", "timestampMillis", "accountId", "note", "tags", "favorite", "repeatFrequency", "createdAt", "updatedAt"]
+    },
+    "Budget": {
+      "title": "Budget",
+      "description": "Monthly spending limit for an expense category.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "monthlyLimit": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "categoryId", "monthlyLimit", "createdAt", "updatedAt"]
+    },
+    "FinanceNote": {
+      "title": "FinanceNote",
+      "description": "User financial memo or reminder note.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "pinned": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "title", "content", "pinned", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserSettings" },
+      "description": "User ledger preferences and initialization metadata."
+    },
+    "/users/{userId}/accountGroups/{groupId}": {
+      "schema": { "$ref": "#/entities/AccountGroup" },
+      "description": "User's account groups (Cash, Bank, Credit Cards, Investments, Loans, etc.)."
+    },
+    "/users/{userId}/accounts/{accountId}": {
+      "schema": { "$ref": "#/entities/Account" },
+      "description": "User's individual accounts with initial balance and type."
+    },
+    "/users/{userId}/categories/{categoryId}": {
+      "schema": { "$ref": "#/entities/Category" },
+      "description": "User's income and expense categories with subcategories."
+    },
+    "/users/{userId}/transactions/{transactionId}": {
+      "schema": { "$ref": "#/entities/LedgerTransaction" },
+      "description": "User's income, expense, and transfer transactions."
+    },
+    "/users/{userId}/budgets/{budgetId}": {
+      "schema": { "$ref": "#/entities/Budget" },
+      "description": "User's monthly category budgets."
+    },
+    "/users/{userId}/notes/{noteId}": {
+      "schema": { "$ref": "#/entities/FinanceNote" },
+      "description": "User's financial notes and reminders."
+    }
+  }
+}

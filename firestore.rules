@@ -1,0 +1,272 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidTimestamp(ts) {
+      return ts is timestamp && ts <= request.time;
+    }
+
+    function isNumber(v) {
+      return v is int || v is float;
+    }
+
+    // --- Validation Helpers ---
+
+    function isValidUserSettings(data, userId) {
+      return data.userId == userId &&
+             data.mainCurrencyCode in ['INR', 'USD', 'EUR', 'GBP'] &&
+             data.mainCurrencySymbol is string && data.mainCurrencySymbol.size() >= 1 && data.mainCurrencySymbol.size() <= 4 &&
+             data.subcategoryEnabled is bool &&
+             data.startScreen in ['DAILY', 'CALENDAR'] &&
+             data.monthlyStartDate is int && data.monthlyStartDate >= 1 && data.monthlyStartDate <= 28 &&
+             data.weeklyStartDay in ['MONDAY', 'SUNDAY'] &&
+             data.seeded is bool &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidAccountGroup(data, userId) {
+      return data.userId == userId &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 60 &&
+             data.groupType in ['ASSET', 'LIABILITY'] &&
+             data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 10000 &&
+             data.archived is bool &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidAccount(data, userId) {
+      return data.userId == userId &&
+             isValidId(data.groupId) &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             isNumber(data.initialBalance) && data.initialBalance >= -1000000000000 && data.initialBalance <= 1000000000000 &&
+             data.accountType in ['ASSET', 'LIABILITY'] &&
+             (!('note' in data) || data.note == null || (data.note is string && data.note.size() <= 300)) &&
+             data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 10000 &&
+             data.archived is bool &&
+             (!('includeInNetWorth' in data) || data.includeInNetWorth is bool) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidCategory(data, userId) {
+      return data.userId == userId &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 60 &&
+             data.type in ['INCOME', 'EXPENSE'] &&
+             data.colorHex is string && data.colorHex.size() == 7 && data.colorHex.matches('^#[0-9A-Fa-f]{6}$') &&
+             data.subcategories is list && data.subcategories.size() <= 30 &&
+             (data.subcategories.size() == 0 || (data.subcategories[0] is string && data.subcategories[0].size() <= 60)) &&
+             data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 10000 &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidTransaction(data, userId) {
+      return data.userId == userId &&
+             data.type in ['INCOME', 'EXPENSE', 'TRANSFER'] &&
+             isNumber(data.amount) && data.amount > 0 && data.amount <= 1000000000000 &&
+             isNumber(data.feeAmount) && data.feeAmount >= 0 && data.feeAmount <= 1000000000000 &&
+             data.epochDay is int && data.epochDay >= -50000 && data.epochDay <= 100000 &&
+             data.timestampMillis is int && data.timestampMillis >= 0 &&
+             isValidId(data.accountId) &&
+             (!('toAccountId' in data) || data.toAccountId == null || isValidId(data.toAccountId)) &&
+             (!('categoryId' in data) || data.categoryId == null || isValidId(data.categoryId)) &&
+             (!('subcategory' in data) || data.subcategory == null || (data.subcategory is string && data.subcategory.size() <= 60)) &&
+             data.note is string && data.note.size() <= 140 &&
+             (!('tagging' in data) || data.tagging == null || (data.tagging is string && data.tagging.size() <= 60)) &&
+             (!('description' in data) || data.description == null || (data.description is string && data.description.size() <= 500)) &&
+             data.tags is list && data.tags.size() <= 10 &&
+             (data.tags.size() == 0 || (data.tags[0] is string && data.tags[0].size() <= 40)) &&
+             data.favorite is bool &&
+             (data.repeatFrequency in ['NONE', 'DAILY', 'WEEKDAYS', 'WEEKLY', 'BIWEEKLY', 'MONTHLY', 'END_OF_MONTH', 'QUARTERLY', 'HALF_YEARLY', 'YEARLY'] ||
+              (data.repeatFrequency is string && data.repeatFrequency.matches('^SPECIFIC_DATE_OF_MONTH:([1-9]|[12][0-9]|3[01])$'))) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidBudget(data, userId) {
+      return data.userId == userId &&
+             isValidId(data.categoryId) &&
+             isNumber(data.monthlyLimit) && data.monthlyLimit >= 0 && data.monthlyLimit <= 1000000000000 &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidFinanceNote(data, userId) {
+      return data.userId == userId &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 100 &&
+             data.content is string && data.content.size() <= 2000 &&
+             data.pinned is bool &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    // --- Collection Rules ---
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().keys().hasAll(['userId', 'mainCurrencyCode', 'mainCurrencySymbol', 'subcategoryEnabled', 'startScreen', 'monthlyStartDate', 'weeklyStartDay', 'seeded', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'mainCurrencyCode', 'mainCurrencySymbol', 'subcategoryEnabled', 'startScreen', 'monthlyStartDate', 'weeklyStartDay', 'seeded', 'createdAt', 'updatedAt']) &&
+                       isValidUserSettings(incoming(), userId);
+
+      allow update: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       isValidUserSettings(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['mainCurrencyCode', 'mainCurrencySymbol', 'subcategoryEnabled', 'startScreen', 'monthlyStartDate', 'weeklyStartDay', 'seeded', 'updatedAt']);
+
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      match /accountGroups/{groupId} {
+        allow get: if isOwner(userId) && isValidId(groupId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(groupId) &&
+                         incoming().keys().hasAll(['userId', 'name', 'groupType', 'sortOrder', 'archived', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'name', 'groupType', 'sortOrder', 'archived', 'createdAt', 'updatedAt']) &&
+                         isValidAccountGroup(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(groupId) &&
+                         isValidAccountGroup(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'groupType', 'sortOrder', 'archived', 'updatedAt']);
+
+        allow delete: if isOwner(userId) && isValidId(groupId);
+      }
+
+      match /accounts/{accountId} {
+        allow get: if isOwner(userId) && isValidId(accountId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(accountId) &&
+                         incoming().keys().hasAll(['userId', 'groupId', 'name', 'initialBalance', 'accountType', 'sortOrder', 'archived', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'groupId', 'name', 'initialBalance', 'accountType', 'note', 'sortOrder', 'archived', 'includeInNetWorth', 'createdAt', 'updatedAt']) &&
+                         isValidAccount(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(accountId) &&
+                         isValidAccount(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['groupId', 'name', 'initialBalance', 'accountType', 'note', 'sortOrder', 'archived', 'includeInNetWorth', 'updatedAt']);
+
+        allow delete: if isOwner(userId) && isValidId(accountId);
+      }
+
+      match /categories/{categoryId} {
+        allow get: if isOwner(userId) && isValidId(categoryId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(categoryId) &&
+                         incoming().keys().hasAll(['userId', 'name', 'type', 'colorHex', 'subcategories', 'sortOrder', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'name', 'type', 'colorHex', 'subcategories', 'sortOrder', 'createdAt', 'updatedAt']) &&
+                         isValidCategory(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(categoryId) &&
+                         isValidCategory(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'colorHex', 'subcategories', 'sortOrder', 'updatedAt']);
+
+        allow delete: if isOwner(userId) && isValidId(categoryId);
+      }
+
+      match /transactions/{transactionId} {
+        allow get: if isOwner(userId) && isValidId(transactionId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(transactionId) &&
+                         incoming().keys().hasAll(['userId', 'type', 'amount', 'feeAmount', 'epochDay', 'timestampMillis', 'accountId', 'note', 'tags', 'favorite', 'repeatFrequency', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'type', 'amount', 'feeAmount', 'epochDay', 'timestampMillis', 'accountId', 'toAccountId', 'categoryId', 'subcategory', 'note', 'tagging', 'description', 'tags', 'favorite', 'repeatFrequency', 'createdAt', 'updatedAt']) &&
+                         isValidTransaction(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(transactionId) &&
+                         isValidTransaction(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['type', 'amount', 'feeAmount', 'epochDay', 'timestampMillis', 'accountId', 'toAccountId', 'categoryId', 'subcategory', 'note', 'tagging', 'description', 'tags', 'favorite', 'repeatFrequency', 'updatedAt']);
+
+        allow delete: if isOwner(userId) && isValidId(transactionId);
+      }
+
+      match /budgets/{budgetId} {
+        allow get: if isOwner(userId) && isValidId(budgetId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(budgetId) &&
+                         incoming().keys().hasAll(['userId', 'categoryId', 'monthlyLimit', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'categoryId', 'monthlyLimit', 'createdAt', 'updatedAt']) &&
+                         isValidBudget(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(budgetId) &&
+                         isValidBudget(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['categoryId', 'monthlyLimit', 'updatedAt']);
+
+        allow delete: if isOwner(userId) && isValidId(budgetId);
+      }
+
+      match /notes/{noteId} {
+        allow get: if isOwner(userId) && isValidId(noteId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(noteId) &&
+                         incoming().keys().hasAll(['userId', 'title', 'content', 'pinned', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'title', 'content', 'pinned', 'createdAt', 'updatedAt']) &&
+                         isValidFinanceNote(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(noteId) &&
+                         isValidFinanceNote(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['title', 'content', 'pinned', 'updatedAt']);
+
+        allow delete: if isOwner(userId) && isValidId(noteId);
+      }
+    }
+  }
+}
