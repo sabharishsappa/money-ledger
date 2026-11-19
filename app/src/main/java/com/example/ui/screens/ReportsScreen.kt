@@ -79,6 +79,7 @@ import com.example.ui.theme.LedgerTextPrimary
 import com.example.ui.theme.LedgerTextSecondary
 import com.example.ui.theme.TabularAmountStyle
 import com.example.util.LedgerFormatters
+import com.example.viewmodel.CreditCardReportCalculator
 import com.example.viewmodel.LedgerDataBundle
 import com.example.viewmodel.LedgerViewModel
 import com.example.viewmodel.NetWorthPeriodPoint
@@ -88,6 +89,12 @@ import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.pow
 import kotlin.math.roundToLong
+
+/** Reports available in the Reports tab. */
+enum class ReportKind(val label: String, val subtitle: String) {
+    NET_WORTH("Net Worth", "Net Worth Summary"),
+    CREDIT_CARDS("Credit Cards", "Credit Card Spending & Dues")
+}
 
 @Composable
 fun ReportsScreen(
@@ -105,6 +112,11 @@ fun ReportsScreen(
     var anchorYear by remember { mutableIntStateOf(currentYear) }
     var selectedIndex by remember { mutableIntStateOf(currentMonth) }
     var accountsExpanded by remember { mutableStateOf(true) }
+    var reportKind by remember { mutableStateOf(ReportKind.NET_WORTH) }
+
+    val creditCardReport = remember(bundle, periodMode, anchorYear) {
+        CreditCardReportCalculator.computeSeries(bundle, periodMode, anchorYear)
+    }
 
     val series = remember(bundle, periodMode, anchorYear) {
         viewModel.computeNetWorthSeries(bundle, periodMode, anchorYear)
@@ -122,6 +134,12 @@ fun ReportsScreen(
 
     val accountSnapshots = remember(bundle, selectedPoint?.cutoffEpochDay) {
         selectedPoint?.let { viewModel.computeNetWorthAccountSnapshots(bundle, it.cutoffEpochDay) }.orEmpty()
+    }
+    val creditCardSummaries = remember(bundle, creditCardReport, safeSelectedIdx) {
+        val period = creditCardReport.periods.getOrNull(safeSelectedIdx)
+        if (period == null) emptyList() else CreditCardReportCalculator.summarize(
+            bundle, creditCardReport.cards, period.startEpochDay, period.endEpochDay
+        )
     }
     val includedCount = bundle.netWorthIncludedAccounts.size
     val excludedAccounts = bundle.netWorthExcludedAccounts
@@ -147,7 +165,7 @@ fun ReportsScreen(
                     color = LedgerTextPrimary
                 )
                 Text(
-                    text = "Net Worth Summary",
+                    text = reportKind.subtitle,
                     style = MaterialTheme.typography.labelSmall,
                     color = LedgerTextSecondary
                 )
@@ -179,6 +197,37 @@ fun ReportsScreen(
                             )
                         }
                     }
+                }
+            }
+        }
+
+        // Report picker (Net Worth / Credit Cards)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(LedgerSurface)
+                .horizontalScroll(rememberScrollState())
+                .padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            ReportKind.entries.forEach { kind ->
+                val active = reportKind == kind
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = if (active) LedgerCoral.copy(alpha = 0.16f) else Color.Transparent,
+                    border = BorderStroke(1.dp, if (active) LedgerCoral else LedgerBorder),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .clickable { reportKind = kind }
+                        .testTag("reports_kind_${kind.name.lowercase()}")
+                ) {
+                    Text(
+                        text = kind.label,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
+                        color = if (active) LedgerCoral else LedgerTextSecondary,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                    )
                 }
             }
         }
@@ -230,7 +279,18 @@ fun ReportsScreen(
 
         HorizontalDivider(color = LedgerDivider, thickness = 1.dp)
 
-        if (bundle.activeAccounts.isEmpty()) {
+        if (reportKind == ReportKind.CREDIT_CARDS) {
+            CreditCardReportContent(
+                hasCards = creditCardReport.cards.isNotEmpty(),
+                periods = creditCardReport.periods,
+                selectedIndex = safeSelectedIdx.coerceIn(0, (creditCardReport.periods.size - 1).coerceAtLeast(0)),
+                summaries = creditCardSummaries,
+                symbol = symbol,
+                mode = periodMode,
+                onSelectIndex = { idx -> selectedIndex = idx },
+                onSelectAccount = onSelectAccount
+            )
+        } else if (bundle.activeAccounts.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize().padding(32.dp),
                 contentAlignment = Alignment.Center
