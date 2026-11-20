@@ -27,6 +27,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.ReceiptLong
@@ -47,6 +48,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -100,6 +102,7 @@ fun TransactionsScreen(
     onAddTransaction: () -> Unit,
     onEditTransaction: (LedgerTransaction) -> Unit,
     onExportCsv: () -> Unit,
+    onImportExcel: () -> Unit,
     onOpenBudgets: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -368,6 +371,7 @@ fun TransactionsScreen(
                         monthExpense = monthExpense,
                         symbol = symbol,
                         onExportCsv = onExportCsv,
+                        onImportExcel = onImportExcel,
                         onOpenBudgets = onOpenBudgets
                     )
                 }
@@ -1016,6 +1020,7 @@ private fun TotalOverviewTab(
     monthExpense: Double,
     symbol: String,
     onExportCsv: () -> Unit,
+    onImportExcel: () -> Unit,
     onOpenBudgets: () -> Unit
 ) {
     val transferTotal = remember(monthTransactions) {
@@ -1107,17 +1112,30 @@ private fun TotalOverviewTab(
             }
         }
 
-        // Export Excel Action
+        // Export & Import Excel Actions
         item {
-            Button(
-                onClick = onExportCsv,
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = LedgerSurfaceElevated, contentColor = LedgerTextPrimary),
-                modifier = Modifier.fillMaxWidth().height(50.dp).testTag("total_export_csv_button")
-            ) {
-                Icon(Icons.Filled.Share, contentDescription = null, tint = LedgerCoral, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Export Ledger to Excel (.xlsx)")
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = onExportCsv,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = LedgerSurfaceElevated, contentColor = LedgerTextPrimary),
+                    modifier = Modifier.fillMaxWidth().height(50.dp).testTag("total_export_csv_button")
+                ) {
+                    Icon(Icons.Filled.Share, contentDescription = null, tint = LedgerCoral, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Export Ledger to Excel (.xlsx)")
+                }
+                OutlinedButton(
+                    onClick = onImportExcel,
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, LedgerBlue.copy(alpha = 0.65f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = LedgerBlue),
+                    modifier = Modifier.fillMaxWidth().height(50.dp).testTag("total_import_excel_button")
+                ) {
+                    Icon(Icons.Filled.FileUpload, contentDescription = null, tint = LedgerBlue, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Import from Excel (.xlsx)")
+                }
             }
         }
 

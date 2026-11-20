@@ -10,6 +10,7 @@ import com.example.data.TransactionType
 import com.example.util.LedgerFormatters
 import com.example.viewmodel.CreditCardReportCalculator
 import com.example.viewmodel.LedgerDataBundle
+import com.example.viewmodel.NetWorthPeriodPoint
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -51,7 +52,11 @@ class CreditCardReportTest {
 
     @Test
     fun februarySummaryCountsSpendPaymentsAndOutstanding() {
-        val report = CreditCardReportCalculator.computeSeries(bundle, ReportPeriodMode.MONTHLY, 2026)
+        val series = listOf(
+            NetWorthPeriodPoint("2026-0", "Jan '26", "Jan 2026", day(0, 31), 0.0, 0.0, 0.0),
+            NetWorthPeriodPoint("2026-1", "Feb '26", "Feb 2026", day(1, 28), 0.0, 0.0, 0.0)
+        )
+        val report = CreditCardReportCalculator.computeSeries(bundle, ReportPeriodMode.MONTHLY, series)
         val feb = report.periods[1]
         assertEquals(510.0, feb.spent, 0.001)   // 300 expense + 200 withdrawal + 10 fee
         assertEquals(1200.0, feb.paid, 0.001)

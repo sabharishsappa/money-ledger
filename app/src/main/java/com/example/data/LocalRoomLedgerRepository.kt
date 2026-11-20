@@ -310,7 +310,7 @@ class LocalRoomLedgerRepository(
         val cleanName = name.trim().take(60)
         if (cleanName.isEmpty()) return Result.failure(IllegalArgumentException("Category name cannot be empty"))
         val safeHex = if (Regex("^#[0-9A-Fa-f]{6}$").matches(colorHex)) colorHex else "#F06458"
-        val cleanSubs = subcategories.map { it.trim().take(60) }.filter { it.isNotEmpty() }.distinct().take(30)
+        val cleanSubs = subcategories.map { it.trim().take(60) }.filter { it.isNotEmpty() }.distinct().take(200)
         return runSafely {
             val id = existingId?.takeIf { it.isNotBlank() } ?: "cat_${UUID.randomUUID().toString().replace("-", "").take(12)}"
             dao.upsertCategory(

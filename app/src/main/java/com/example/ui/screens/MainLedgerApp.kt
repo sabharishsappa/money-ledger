@@ -1,6 +1,9 @@
 package com.example.ui.screens
 
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -17,19 +20,23 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
@@ -76,16 +83,20 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.example.data.AccountNature
 import com.example.data.CategoryType
 import com.example.data.LedgerTransaction
 import com.example.data.LocalLedgerDatabase
 import com.example.data.LocalRoomLedgerRepository
 import com.example.data.MainTab
+import com.example.data.TransactionType
+import com.example.ui.theme.LedgerAmber
 import com.example.ui.theme.LedgerBackground
 import com.example.ui.theme.LedgerBlue
 import com.example.ui.theme.LedgerBorder
 import com.example.ui.theme.LedgerCoral
 import com.example.ui.theme.LedgerDivider
+import com.example.ui.theme.LedgerGreen
 import com.example.ui.theme.LedgerNavBar
 import com.example.ui.theme.LedgerSurface
 import com.example.ui.theme.LedgerSurfaceElevated
@@ -93,6 +104,10 @@ import com.example.ui.theme.LedgerTextMuted
 import com.example.ui.theme.LedgerTextPrimary
 import com.example.ui.theme.LedgerTextSecondary
 import com.example.util.LedgerExcelExporter
+import com.example.util.LedgerExcelImporter
+import com.example.util.LedgerImportPreview
+import com.example.util.LedgerMasterExcelUtil
+import com.example.util.LedgerMasterUploadPreview
 import com.example.viewmodel.LedgerDataBundle
 import com.example.viewmodel.LedgerViewModel
 import com.example.viewmodel.UiState
@@ -103,7 +118,12 @@ import java.io.File
 
 private sealed interface ActiveOverlay {
     data object None : ActiveOverlay
-    data class AddEditTx(val existing: LedgerTransaction?) : ActiveOverlay
+    data class AddEditTx(
+        val existing: LedgerTransaction?,
+        val prefillType: TransactionType? = null,
+        val prefillCategoryId: String? = null,
+        val prefillSubcategory: String? = null
+    ) : ActiveOverlay
     data class AccountDetail(val accountId: String) : ActiveOverlay
     data class Configuration(val route: ConfigRoute) : ActiveOverlay
 }
@@ -144,6 +164,17 @@ private fun LocalLedgerShell(
     var overlay by remember { mutableStateOf<ActiveOverlay>(ActiveOverlay.None) }
     var exportDialogBundle by remember { mutableStateOf<LedgerDataBundle?>(null) }
     var pendingSaveBundle by remember { mutableStateOf<LedgerDataBundle?>(null) }
+    var importDialogBundle by remember { mutableStateOf<LedgerDataBundle?>(null) }
+    var pendingImportBundle by remember { mutableStateOf<LedgerDataBundle?>(null) }
+    var importPreviewState by remember { mutableStateOf<Pair<LedgerDataBundle, LedgerImportPreview>?>(null) }
+    var isImporting by remember { mutableStateOf(false) }
+
+    var ledgerUploadDialogBundle by remember { mutableStateOf<LedgerDataBundle?>(null) }
+    var pendingLedgerTemplateBundle by remember { mutableStateOf<LedgerDataBundle?>(null) }
+    var pendingLedgerUploadBundle by remember { mutableStateOf<LedgerDataBundle?>(null) }
+    var ledgerUploadPreviewState by remember { mutableStateOf<Pair<LedgerDataBundle, LedgerMasterUploadPreview>?>(null) }
+    var isUploadingLedgers by remember { mutableStateOf(false) }
+    var createCategoryLedgerDialogState by remember { mutableStateOf<Pair<CategoryType, String?>?>(null) }
 
     val createExcelLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument(LedgerExcelExporter.XLSX_MIME_TYPE)
@@ -162,6 +193,98 @@ private fun LocalLedgerShell(
                 snackbarHostState.showSnackbar(
                     if (ok) "Excel report (.xlsx) saved" else "Failed to save Excel file"
                 )
+            }
+        }
+    }
+
+    val createTemplateLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument(LedgerExcelExporter.XLSX_MIME_TYPE)
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val ok = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openOutputStream(uri)?.use { out ->
+                            LedgerExcelExporter.writeBlankTemplateXlsx(out)
+                        } ?: error("Unable to open output stream")
+                    }.isSuccess
+                }
+                snackbarHostState.showSnackbar(
+                    if (ok) "Blank Excel template (.xlsx) saved" else "Failed to save template file"
+                )
+            }
+        }
+    }
+
+    val createLedgerTemplateLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument(LedgerExcelExporter.XLSX_MIME_TYPE)
+    ) { uri ->
+        val targetBundle = pendingLedgerTemplateBundle
+        pendingLedgerTemplateBundle = null
+        if (uri != null && targetBundle != null) {
+            scope.launch {
+                val ok = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openOutputStream(uri)?.use { out ->
+                            LedgerMasterExcelUtil.writeLedgerTemplateXlsx(targetBundle, out)
+                        } ?: error("Unable to open output stream")
+                    }.isSuccess
+                }
+                snackbarHostState.showSnackbar(
+                    if (ok) "Ledgers template (.xlsx) saved" else "Failed to save ledgers template"
+                )
+            }
+        }
+    }
+
+    val openImportFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        val targetBundle = pendingImportBundle
+        pendingImportBundle = null
+        if (uri != null && targetBundle != null) {
+            scope.launch {
+                val displayName = resolveDocumentDisplayName(context, uri)
+                val result = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openInputStream(uri)?.use { stream ->
+                            LedgerExcelImporter.parseStream(stream, displayName, targetBundle).getOrThrow()
+                        } ?: error("Unable to read the selected file.")
+                    }
+                }
+                result.onSuccess { preview ->
+                    importPreviewState = targetBundle to preview
+                }.onFailure { err ->
+                    snackbarHostState.showSnackbar(
+                        err.localizedMessage ?: "Could not parse the selected Excel file"
+                    )
+                }
+            }
+        }
+    }
+
+    val openLedgerUploadLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        val targetBundle = pendingLedgerUploadBundle
+        pendingLedgerUploadBundle = null
+        if (uri != null && targetBundle != null) {
+            scope.launch {
+                val displayName = resolveDocumentDisplayName(context, uri)
+                val result = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openInputStream(uri)?.use { stream ->
+                            LedgerMasterExcelUtil.parseStream(stream, displayName, targetBundle).getOrThrow()
+                        } ?: error("Unable to read the selected file.")
+                    }
+                }
+                result.onSuccess { preview ->
+                    ledgerUploadPreviewState = targetBundle to preview
+                }.onFailure { err ->
+                    snackbarHostState.showSnackbar(
+                        err.localizedMessage ?: "Could not parse the selected ledgers file"
+                    )
+                }
             }
         }
     }
@@ -261,6 +384,9 @@ private fun LocalLedgerShell(
                     AddEditTransactionScreen(
                         bundle = bundle,
                         existing = currentOverlay.existing,
+                        prefillType = currentOverlay.prefillType,
+                        prefillCategoryId = currentOverlay.prefillCategoryId,
+                        prefillSubcategory = currentOverlay.prefillSubcategory,
                         onBack = { overlay = ActiveOverlay.None },
                         onSave = { existingId, tx, keepOpen ->
                             viewModel.saveTransaction(existingId, tx) { ok ->
@@ -291,6 +417,9 @@ private fun LocalLedgerShell(
                                 if (catType == CategoryType.INCOME) ConfigRoute.INCOME_CATEGORIES
                                 else ConfigRoute.EXPENSE_CATEGORIES
                             )
+                        },
+                        onCreateCategoryLedger = { catId, ledgerName, onCreated ->
+                            viewModel.addCategoryLedger(bundle, catId, ledgerName, onCreated)
                         }
                     )
                 }
@@ -315,6 +444,24 @@ private fun LocalLedgerShell(
                         onBackToMain = { overlay = ActiveOverlay.None },
                         onEditTransaction = { tx ->
                             overlay = ActiveOverlay.AddEditTx(tx)
+                        },
+                        onMassUploadLedgers = {
+                            ledgerUploadDialogBundle = bundle
+                        },
+                        onCreateCategoryLedger = { catType, catId ->
+                            createCategoryLedgerDialogState = catType to catId
+                        },
+                        onPostEntryForCategoryLedger = { catType, catId, ledgerName ->
+                            overlay = ActiveOverlay.AddEditTx(
+                                existing = null,
+                                prefillType = if (catType == CategoryType.INCOME) {
+                                    TransactionType.INCOME
+                                } else {
+                                    TransactionType.EXPENSE
+                                },
+                                prefillCategoryId = catId,
+                                prefillSubcategory = ledgerName
+                            )
                         }
                     )
                 }
@@ -373,6 +520,9 @@ private fun LocalLedgerShell(
                                         onSelectAccount = { acc -> overlay = ActiveOverlay.AccountDetail(acc.id) },
                                         onOpenConfig = { route -> overlay = ActiveOverlay.Configuration(route) },
                                         onExportCsv = { exportDialogBundle = bundle },
+                                        onImportExcel = { importDialogBundle = bundle },
+                                        onMassUploadLedgers = { ledgerUploadDialogBundle = bundle },
+                                        onCreateCategoryLedger = { createCategoryLedgerDialogState = CategoryType.EXPENSE to null },
                                         modifier = Modifier.padding(innerPadding)
                                     )
                                 }
@@ -399,6 +549,9 @@ private fun LocalLedgerShell(
                                     onSelectAccount = { acc -> overlay = ActiveOverlay.AccountDetail(acc.id) },
                                     onOpenConfig = { route -> overlay = ActiveOverlay.Configuration(route) },
                                     onExportCsv = { exportDialogBundle = bundle },
+                                    onImportExcel = { importDialogBundle = bundle },
+                                    onMassUploadLedgers = { ledgerUploadDialogBundle = bundle },
+                                    onCreateCategoryLedger = { createCategoryLedgerDialogState = CategoryType.EXPENSE to null },
                                     modifier = Modifier.padding(innerPadding)
                                 )
                             }
@@ -518,8 +671,640 @@ private fun LocalLedgerShell(
                     }
                 )
             }
+
+            importDialogBundle?.let { targetBundle ->
+                AlertDialog(
+                    onDismissRequest = { importDialogBundle = null },
+                    containerColor = LedgerSurface,
+                    title = {
+                        Text(
+                            text = "Import from Excel (.xlsx)",
+                            color = LedgerTextPrimary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(
+                                text = "Select an Excel (.xlsx) or CSV file using the same double-entry format as Export (2 lines per entry: Debit + / Credit -).",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = LedgerTextSecondary
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = LedgerSurfaceElevated,
+                                border = BorderStroke(1.dp, LedgerBorder),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = "Columns: Date • Account • Note • Tag • Description / Remarks • Amount",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = LedgerTextPrimary
+                                    )
+                                    Text(
+                                        text = "• Expense: Category (+), Account (-)",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = LedgerTextMuted
+                                    )
+                                    Text(
+                                        text = "• Income: Account (+), Category (-)",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = LedgerTextMuted
+                                    )
+                                    Text(
+                                        text = "• Transfer: To Account (+), From Account (-)",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = LedgerTextMuted
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Button(
+                                onClick = {
+                                    importDialogBundle = null
+                                    pendingImportBundle = targetBundle
+                                    openImportFileLauncher.launch(arrayOf("*/*"))
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = LedgerCoral,
+                                    contentColor = Color.White
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(46.dp)
+                                    .testTag("import_choose_excel_button")
+                            ) {
+                                Icon(Icons.Filled.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Choose Excel / CSV File", fontWeight = FontWeight.SemiBold)
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    importDialogBundle = null
+                                    createTemplateLauncher.launch(LedgerExcelExporter.templateFileName())
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, LedgerBlue.copy(alpha = 0.7f)),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = LedgerBlue),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(46.dp)
+                                    .testTag("import_save_template_button")
+                            ) {
+                                Icon(Icons.Filled.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Save Blank Template (.xlsx)", fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = {
+                        TextButton(onClick = { importDialogBundle = null }) {
+                            Text("Cancel", color = LedgerTextMuted)
+                        }
+                    }
+                )
+            }
+
+            importPreviewState?.let { (targetBundle, preview) ->
+                AlertDialog(
+                    onDismissRequest = { if (!isImporting) importPreviewState = null },
+                    containerColor = LedgerSurface,
+                    title = {
+                        Text(
+                            text = "Confirm Excel Import",
+                            color = LedgerTextPrimary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    },
+                    text = {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 360.dp)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = "File: ${preview.fileName}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = LedgerTextMuted
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = LedgerSurfaceElevated,
+                                border = BorderStroke(1.dp, LedgerBorder),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = "${preview.transactions.size} entries ready to import",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = LedgerGreen,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = "${preview.expenseCount} Expenses • ${preview.incomeCount} Income • ${preview.transferCount} Transfers",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = LedgerTextSecondary
+                                    )
+                                }
+                            }
+
+                            if (preview.newAccountNames.isNotEmpty() ||
+                                preview.newExpenseCategoryNames.isNotEmpty() ||
+                                preview.newIncomeCategoryNames.isNotEmpty()
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = LedgerSurfaceElevated,
+                                    border = BorderStroke(1.dp, LedgerBlue.copy(alpha = 0.45f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Text(
+                                            text = "Will auto-create missing ledgers:",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = LedgerBlue,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        if (preview.newAccountNames.isNotEmpty()) {
+                                            Text(
+                                                text = "Accounts: ${preview.newAccountNames.joinToString(", ")}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = LedgerTextSecondary
+                                            )
+                                        }
+                                        if (preview.newExpenseCategoryNames.isNotEmpty()) {
+                                            Text(
+                                                text = "Expense Categories: ${preview.newExpenseCategoryNames.joinToString(", ")}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = LedgerTextSecondary
+                                            )
+                                        }
+                                        if (preview.newIncomeCategoryNames.isNotEmpty()) {
+                                            Text(
+                                                text = "Income Categories: ${preview.newIncomeCategoryNames.joinToString(", ")}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = LedgerTextSecondary
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (preview.warnings.isNotEmpty()) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = LedgerSurfaceElevated,
+                                    border = BorderStroke(1.dp, LedgerAmber.copy(alpha = 0.5f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Text(
+                                            text = "${preview.warnings.size} row warning(s) skipped:",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = LedgerAmber,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        preview.warnings.take(8).forEach { w ->
+                                            Text(
+                                                text = "• $w",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = LedgerTextMuted
+                                            )
+                                        }
+                                        if (preview.warnings.size > 8) {
+                                            Text(
+                                                text = "+ ${preview.warnings.size - 8} more warning(s)",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = LedgerTextMuted
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                if (!isImporting) {
+                                    isImporting = true
+                                    viewModel.importExcelTransactions(targetBundle, preview) {
+                                        isImporting = false
+                                        importPreviewState = null
+                                    }
+                                }
+                            },
+                            enabled = !isImporting,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = LedgerCoral,
+                                contentColor = Color.White
+                            ),
+                            modifier = Modifier.testTag("import_confirm_button")
+                        ) {
+                            if (isImporting) {
+                                CircularProgressIndicator(
+                                    color = Color.White,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Importing...")
+                            } else {
+                                Text("Import ${preview.transactions.size} Entries")
+                            }
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = { if (!isImporting) importPreviewState = null },
+                            enabled = !isImporting
+                        ) {
+                            Text("Cancel", color = LedgerTextMuted)
+                        }
+                    }
+                )
+            }
+
+            ledgerUploadDialogBundle?.let { targetBundle ->
+                AlertDialog(
+                    onDismissRequest = { ledgerUploadDialogBundle = null },
+                    containerColor = LedgerSurface,
+                    title = {
+                        Text(
+                            text = "Mass Upload Ledgers",
+                            color = LedgerTextPrimary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(
+                                text = "Upload an Excel (.xlsx) or CSV file with two columns to bulk-create ledgers at once.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = LedgerTextSecondary
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = LedgerSurfaceElevated,
+                                border = BorderStroke(1.dp, LedgerBorder),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = "Columns: Ledger Name • Group",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = LedgerTextPrimary,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = "• Account Group (e.g. Bank Accounts, Cash, Credit Cards, Loans, or any new group) → creates Account ledger",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = LedgerTextMuted
+                                    )
+                                    Text(
+                                        text = "• Existing Expense / Income Category → creates Expense/Income Ledger under it",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = LedgerTextMuted
+                                    )
+                                    Text(
+                                        text = "• Expenses / Income → creates new Expense or Income Category",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = LedgerTextMuted
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Button(
+                                onClick = {
+                                    ledgerUploadDialogBundle = null
+                                    pendingLedgerUploadBundle = targetBundle
+                                    openLedgerUploadLauncher.launch(arrayOf("*/*"))
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = LedgerCoral,
+                                    contentColor = Color.White
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(46.dp)
+                                    .testTag("mass_upload_choose_file_button")
+                            ) {
+                                Icon(Icons.Filled.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Choose Excel / CSV File", fontWeight = FontWeight.SemiBold)
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    ledgerUploadDialogBundle = null
+                                    pendingLedgerTemplateBundle = targetBundle
+                                    createLedgerTemplateLauncher.launch(LedgerMasterExcelUtil.templateFileName())
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, LedgerBlue.copy(alpha = 0.7f)),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = LedgerBlue),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(46.dp)
+                                    .testTag("mass_upload_save_template_button")
+                            ) {
+                                Icon(Icons.Filled.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Save Blank Template (.xlsx)", fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = {
+                        TextButton(onClick = { ledgerUploadDialogBundle = null }) {
+                            Text("Cancel", color = LedgerTextMuted)
+                        }
+                    }
+                )
+            }
+
+            ledgerUploadPreviewState?.let { (targetBundle, preview) ->
+                var groupNatureOverrides by remember(preview) {
+                    mutableStateOf(preview.newGroups.associate { it.name to it.inferredNature })
+                }
+
+                AlertDialog(
+                    onDismissRequest = { if (!isUploadingLedgers) ledgerUploadPreviewState = null },
+                    containerColor = LedgerSurface,
+                    title = {
+                        Text(
+                            text = "Confirm Mass Upload",
+                            color = LedgerTextPrimary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    },
+                    text = {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 380.dp)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = "File: ${preview.fileName}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = LedgerTextMuted
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = LedgerSurfaceElevated,
+                                border = BorderStroke(1.dp, LedgerBorder),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = "${preview.items.size} ledger(s) ready to upload",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = LedgerGreen,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = "${preview.accountCount} Accounts • ${preview.expenseCategoryCount} Expense Cat. • ${preview.incomeCategoryCount} Income Cat.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = LedgerTextSecondary
+                                    )
+                                }
+                            }
+
+                            // New groups with Asset / Liability toggle
+                            if (preview.newGroups.isNotEmpty()) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = LedgerSurfaceElevated,
+                                    border = BorderStroke(1.dp, LedgerBlue.copy(alpha = 0.45f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = "New groups to create (tap to set Asset / Liability):",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = LedgerBlue,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        preview.newGroups.forEach { proposal ->
+                                            val selectedNature = groupNatureOverrides[proposal.name] ?: proposal.inferredNature
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = proposal.name,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = LedgerTextPrimary,
+                                                    modifier = Modifier.weight(1f).padding(end = 8.dp)
+                                                )
+                                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                    AccountNature.entries.forEach { opt ->
+                                                        val active = selectedNature == opt
+                                                        val tint = if (opt == AccountNature.ASSET) LedgerBlue else LedgerCoral
+                                                        Surface(
+                                                            shape = RoundedCornerShape(6.dp),
+                                                            color = if (active) tint.copy(alpha = 0.22f) else LedgerSurface,
+                                                            border = BorderStroke(1.dp, if (active) tint else LedgerBorder),
+                                                            modifier = Modifier.clickable {
+                                                                groupNatureOverrides = groupNatureOverrides + (proposal.name to opt)
+                                                            }
+                                                        ) {
+                                                            Text(
+                                                                text = if (opt == AccountNature.ASSET) "Asset" else "Liab.",
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                color = if (active) tint else LedgerTextMuted,
+                                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Sample preview of ledgers to be uploaded
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = LedgerSurfaceElevated,
+                                border = BorderStroke(1.dp, LedgerBorder),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = "Preview:",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = LedgerTextSecondary,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    preview.items.take(8).forEach { row ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(
+                                                text = row.ledgerName,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = LedgerTextPrimary,
+                                                modifier = Modifier.weight(1f).padding(end = 8.dp)
+                                            )
+                                            Text(
+                                                text = row.groupName,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = LedgerTextMuted
+                                            )
+                                        }
+                                    }
+                                    if (preview.items.size > 8) {
+                                        Text(
+                                            text = "+ ${preview.items.size - 8} more ledger(s)",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = LedgerTextMuted
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (preview.duplicateNames.isNotEmpty()) {
+                                Text(
+                                    text = "${preview.duplicateNames.size} existing ledger(s) skipped (already in your ledger).",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = LedgerTextMuted
+                                )
+                            }
+
+                            if (preview.warnings.isNotEmpty()) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = LedgerSurfaceElevated,
+                                    border = BorderStroke(1.dp, LedgerAmber.copy(alpha = 0.5f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Text(
+                                            text = "${preview.warnings.size} row warning(s) skipped:",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = LedgerAmber,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        preview.warnings.take(6).forEach { w ->
+                                            Text(
+                                                text = "• $w",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = LedgerTextMuted
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                if (!isUploadingLedgers) {
+                                    isUploadingLedgers = true
+                                    viewModel.massUploadLedgers(
+                                        bundle = targetBundle,
+                                        preview = preview,
+                                        groupNatureOverrides = groupNatureOverrides
+                                    ) {
+                                        isUploadingLedgers = false
+                                        ledgerUploadPreviewState = null
+                                    }
+                                }
+                            },
+                            enabled = !isUploadingLedgers,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = LedgerCoral,
+                                contentColor = Color.White
+                            ),
+                            modifier = Modifier.testTag("mass_upload_confirm_button")
+                        ) {
+                            if (isUploadingLedgers) {
+                                CircularProgressIndicator(
+                                    color = Color.White,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Uploading...")
+                            } else {
+                                Text("Upload ${preview.items.size} Ledgers")
+                            }
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = { if (!isUploadingLedgers) ledgerUploadPreviewState = null },
+                            enabled = !isUploadingLedgers
+                        ) {
+                            Text("Cancel", color = LedgerTextMuted)
+                        }
+                    }
+                )
+            }
+
+            createCategoryLedgerDialogState?.let { (initialType, initialCatId) ->
+                CreateCategoryLedgerDialog(
+                    bundle = bundle,
+                    initialType = initialType,
+                    initialCategoryId = initialCatId,
+                    lockType = false,
+                    onDismiss = { createCategoryLedgerDialogState = null },
+                    onConfirm = { targetCatId, ledgerName ->
+                        createCategoryLedgerDialogState = null
+                        viewModel.addCategoryLedger(bundle, targetCatId, ledgerName)
+                    }
+                )
+            }
         }
     }
+}
+
+private fun resolveDocumentDisplayName(context: Context, uri: Uri): String {
+    return runCatching {
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0) else null
+            }
+    }.getOrNull()?.takeIf { it.isNotBlank() } ?: uri.lastPathSegment ?: "Selected file"
 }
 
 @Composable
@@ -533,6 +1318,9 @@ private fun MainTabContent(
     onSelectAccount: (com.example.data.Account) -> Unit,
     onOpenConfig: (ConfigRoute) -> Unit,
     onExportCsv: () -> Unit,
+    onImportExcel: () -> Unit,
+    onMassUploadLedgers: () -> Unit,
+    onCreateCategoryLedger: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     when (activeTab) {
@@ -543,6 +1331,7 @@ private fun MainTabContent(
             onAddTransaction = onAddTransaction,
             onEditTransaction = onEditTransaction,
             onExportCsv = onExportCsv,
+            onImportExcel = onImportExcel,
             onOpenBudgets = { onOpenConfig(ConfigRoute.BUDGET_SETTING) },
             modifier = modifier
         )
@@ -568,6 +1357,8 @@ private fun MainTabContent(
             onSelectAccount = onSelectAccount,
             onOpenAccountsSetting = { onOpenConfig(ConfigRoute.ACCOUNTS_SETTING) },
             onOpenAccountGroups = { onOpenConfig(ConfigRoute.ACCOUNT_GROUPS) },
+            onMassUploadLedgers = onMassUploadLedgers,
+            onCreateCategoryLedger = onCreateCategoryLedger,
             modifier = modifier
         )
 
@@ -575,6 +1366,8 @@ private fun MainTabContent(
             bundle = bundle,
             onOpenConfiguration = { onOpenConfig(ConfigRoute.ROOT) },
             onExportCsv = onExportCsv,
+            onImportExcel = onImportExcel,
+            onMassUploadLedgers = onMassUploadLedgers,
             onOpenBudgets = { onOpenConfig(ConfigRoute.BUDGET_SETTING) },
             modifier = modifier
         )

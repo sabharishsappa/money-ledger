@@ -19,6 +19,9 @@ import com.example.data.TransactionsSubTab
 import com.example.data.UserSettings
 import com.example.util.LedgerExcelExporter
 import com.example.util.LedgerFormatters
+import com.example.util.LedgerImportPreview
+import com.example.util.LedgerMasterUploadPreview
+import com.example.util.LedgerUploadKind
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -33,6 +36,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.Calendar
+import java.util.Locale
+import java.util.UUID
 import kotlin.math.abs
 
 sealed interface UiState<out T> {
@@ -93,6 +98,7 @@ data class NetWorthPeriodPoint(
 data class NetWorthAccountSnapshot(
     val account: Account,
     val groupName: String,
+    val nature: AccountNature,
     val balance: Double
 )
 
@@ -229,18 +235,23 @@ data class LedgerDataBundle(
         activeAccounts.sumOf { acc -> accountUntaggedBalances[acc.id] ?: acc.initialBalance }
     }
 
+    val groupNatureById: Map<String, AccountNature> by lazy {
+        accountGroups.associate { it.id to it.nature() }
+    }
+
+    fun natureOf(account: Account): AccountNature =
+        groupNatureById[account.groupId] ?: account.nature()
+
     val totalAssets: Double by lazy {
-        activeAccounts.sumOf { acc ->
-            val bal = accountBalances[acc.id] ?: acc.initialBalance
-            if (bal > 0.0) bal else 0.0
-        }
+        activeAccounts
+            .filter { natureOf(it) == AccountNature.ASSET }
+            .sumOf { acc -> accountBalances[acc.id] ?: acc.initialBalance }
     }
 
     val totalLiabilities: Double by lazy {
-        activeAccounts.sumOf { acc ->
-            val bal = accountBalances[acc.id] ?: acc.initialBalance
-            if (bal < 0.0) abs(bal) else 0.0
-        }
+        activeAccounts
+            .filter { natureOf(it) == AccountNature.LIABILITY }
+            .sumOf { acc -> -(accountBalances[acc.id] ?: acc.initialBalance) }
     }
 
     val netTotal: Double
@@ -580,32 +591,53 @@ class LedgerViewModel(
 
     fun computeNetWorthSeries(
         bundle: LedgerDataBundle,
-        mode: ReportPeriodMode,
-        anchorYear: Int
+        mode: ReportPeriodMode
     ): List<NetWorthPeriodPoint> {
         val includedAccounts = bundle.netWorthIncludedAccounts
         val includedIds = includedAccounts.map { it.id }.toSet()
         val runningBalances = includedAccounts.associate { it.id to it.initialBalance }.toMutableMap()
         val sortedTxs = bundle.transactions.sortedBy { it.epochDay }
 
+        val todayEpoch = LedgerFormatters.todayEpochDay()
+        val maxEpoch = maxOf(todayEpoch, sortedTxs.lastOrNull()?.epochDay ?: todayEpoch)
+        val endCal = LedgerFormatters.epochDayToCalendar(maxEpoch)
+        val endYear = endCal.get(Calendar.YEAR)
+        val endMonth = endCal.get(Calendar.MONTH)
+
+        val minTxCal = sortedTxs.firstOrNull()?.epochDay?.let { LedgerFormatters.epochDayToCalendar(it) }
         val monthNames = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
         val periods: List<Triple<String, Pair<String, String>, Long>> = when (mode) {
-            ReportPeriodMode.MONTHLY -> (0..11).map { m ->
-                val lastDay = LedgerFormatters.daysInMonth(anchorYear, m)
-                val cutoff = LedgerFormatters.calendarToEpochDay(anchorYear, m, lastDay)
-                Triple(
-                    "$anchorYear-$m",
-                    monthNames[m] to "${monthNames[m]} $anchorYear",
-                    cutoff
-                )
+            ReportPeriodMode.MONTHLY -> {
+                val endMonthIdx = endYear * 12 + endMonth
+                val defaultStartIdx = endMonthIdx - 11
+                val txStartIdx = minTxCal?.let { it.get(Calendar.YEAR) * 12 + it.get(Calendar.MONTH) } ?: defaultStartIdx
+                val startMonthIdx = minOf(defaultStartIdx, txStartIdx).coerceAtLeast(endMonthIdx - 240)
+                (startMonthIdx..endMonthIdx).map { mIdx ->
+                    val y = mIdx / 12
+                    val m = mIdx % 12
+                    val lastDay = LedgerFormatters.daysInMonth(y, m)
+                    val cutoff = LedgerFormatters.calendarToEpochDay(y, m, lastDay)
+                    val shortYear = (y % 100).toString().padStart(2, '0')
+                    Triple(
+                        "$y-$m",
+                        "${monthNames[m]} '$shortYear" to "${monthNames[m]} $y",
+                        cutoff
+                    )
+                }
             }
-            ReportPeriodMode.YEARLY -> ((anchorYear - 5)..anchorYear).map { y ->
-                val cutoff = LedgerFormatters.calendarToEpochDay(y, 11, 31)
-                Triple(
-                    "$y",
-                    "$y" to "Year $y",
-                    cutoff
-                )
+            ReportPeriodMode.YEARLY -> {
+                val defaultStartYear = endYear - 5
+                val txStartYear = minTxCal?.get(Calendar.YEAR) ?: defaultStartYear
+                val startYear = minOf(defaultStartYear, txStartYear).coerceAtLeast(endYear - 25)
+                (startYear..endYear).map { y ->
+                    val cutoff = LedgerFormatters.calendarToEpochDay(y, Calendar.DECEMBER, 31)
+                    Triple(
+                        "$y",
+                        "$y" to "Year $y",
+                        cutoff
+                    )
+                }
             }
         }
 
@@ -640,11 +672,11 @@ class LedgerViewModel(
 
             var assets = 0.0
             var liabilities = 0.0
-            runningBalances.values.forEach { bal ->
-                if (bal >= 0.0) {
-                    assets += bal
-                } else {
-                    liabilities += abs(bal)
+            includedAccounts.forEach { acc ->
+                val bal = runningBalances[acc.id] ?: acc.initialBalance
+                when (bundle.natureOf(acc)) {
+                    AccountNature.ASSET -> assets += bal
+                    AccountNature.LIABILITY -> liabilities += -bal
                 }
             }
             NetWorthPeriodPoint(
@@ -698,13 +730,316 @@ class LedgerViewModel(
             NetWorthAccountSnapshot(
                 account = acc,
                 groupName = groupNames[acc.groupId] ?: "Account",
+                nature = bundle.natureOf(acc),
                 balance = balances[acc.id] ?: acc.initialBalance
             )
-        }.sortedByDescending { abs(it.balance) }
+        }.sortedWith(
+            compareBy<NetWorthAccountSnapshot> { it.nature != AccountNature.ASSET }
+                .thenByDescending { abs(it.balance) }
+        )
     }
 
     fun buildCsvExport(bundle: LedgerDataBundle): String {
         return LedgerExcelExporter.buildDoubleEntryCsv(bundle)
+    }
+
+    fun importExcelTransactions(
+        bundle: LedgerDataBundle,
+        preview: LedgerImportPreview,
+        onComplete: (Boolean) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            try {
+                // 1. Resolve or create any missing Accounts
+                val accountIdByLower = mutableMapOf<String, String>()
+                bundle.accounts.sortedBy { it.archived }.forEach { acc ->
+                    accountIdByLower.putIfAbsent(acc.name.trim().lowercase(Locale.US), acc.id)
+                }
+
+                val defaultGroup = bundle.activeGroups.firstOrNull { it.nature() == AccountNature.ASSET }
+                    ?: bundle.activeGroups.firstOrNull()
+                    ?: bundle.accountGroups.firstOrNull()
+                val fallbackGroupId = if (defaultGroup != null) {
+                    defaultGroup.id
+                } else {
+                    val newGrpId = "grp_${UUID.randomUUID().toString().replace("-", "").take(12)}"
+                    repository.saveAccountGroup(
+                        userId = currentUserId,
+                        existingId = newGrpId,
+                        name = "Accounts",
+                        groupType = AccountNature.ASSET,
+                        sortOrder = 0L
+                    ).getOrThrow()
+                    newGrpId
+                }
+
+                var nextAccountSort = (bundle.accounts.maxOfOrNull { it.sortOrder } ?: 0L) + 1L
+                preview.newAccountNames.forEach { accName ->
+                    val key = accName.trim().lowercase(Locale.US)
+                    if (!accountIdByLower.containsKey(key)) {
+                        val newAccId = "acc_${UUID.randomUUID().toString().replace("-", "").take(12)}"
+                        repository.saveAccount(
+                            userId = currentUserId,
+                            existingId = newAccId,
+                            groupId = fallbackGroupId,
+                            name = accName.trim(),
+                            initialBalance = 0.0,
+                            accountType = AccountNature.ASSET,
+                            note = "Created during Excel import",
+                            sortOrder = nextAccountSort++,
+                            includeInNetWorth = true
+                        ).getOrThrow()
+                        accountIdByLower[key] = newAccId
+                    }
+                }
+
+                // 2. Resolve or create any missing Expense / Income Categories
+                val expenseCatIdByLower = mutableMapOf<String, String>()
+                val incomeCatIdByLower = mutableMapOf<String, String>()
+                bundle.categories.forEach { cat ->
+                    val key = cat.name.trim().lowercase(Locale.US)
+                    when (cat.categoryType()) {
+                        CategoryType.EXPENSE -> expenseCatIdByLower.putIfAbsent(key, cat.id)
+                        CategoryType.INCOME -> incomeCatIdByLower.putIfAbsent(key, cat.id)
+                    }
+                }
+
+                val palette = com.example.ui.theme.ChartColorHexes
+                var nextCatSort = (bundle.categories.maxOfOrNull { it.sortOrder } ?: 0L) + 1L
+                var colorIdx = bundle.categories.size
+
+                preview.newExpenseCategoryNames.forEach { catName ->
+                    val key = catName.trim().lowercase(Locale.US)
+                    if (!expenseCatIdByLower.containsKey(key)) {
+                        val newCatId = "cat_${UUID.randomUUID().toString().replace("-", "").take(12)}"
+                        val subsForCat = preview.transactions
+                            .filter { it.type == TransactionType.EXPENSE && it.categoryName.equals(catName, ignoreCase = true) }
+                            .mapNotNull { it.subcategory?.takeIf { s -> s.isNotBlank() } }
+                            .distinct()
+                        repository.saveCategory(
+                            userId = currentUserId,
+                            existingId = newCatId,
+                            name = catName.trim(),
+                            type = CategoryType.EXPENSE,
+                            colorHex = palette[(colorIdx++) % palette.size],
+                            subcategories = subsForCat,
+                            sortOrder = nextCatSort++
+                        ).getOrThrow()
+                        expenseCatIdByLower[key] = newCatId
+                    }
+                }
+
+                preview.newIncomeCategoryNames.forEach { catName ->
+                    val key = catName.trim().lowercase(Locale.US)
+                    if (!incomeCatIdByLower.containsKey(key)) {
+                        val newCatId = "cat_${UUID.randomUUID().toString().replace("-", "").take(12)}"
+                        val subsForCat = preview.transactions
+                            .filter { it.type == TransactionType.INCOME && it.categoryName.equals(catName, ignoreCase = true) }
+                            .mapNotNull { it.subcategory?.takeIf { s -> s.isNotBlank() } }
+                            .distinct()
+                        repository.saveCategory(
+                            userId = currentUserId,
+                            existingId = newCatId,
+                            name = catName.trim(),
+                            type = CategoryType.INCOME,
+                            colorHex = palette[(colorIdx++) % palette.size],
+                            subcategories = subsForCat,
+                            sortOrder = nextCatSort++
+                        ).getOrThrow()
+                        incomeCatIdByLower[key] = newCatId
+                    }
+                }
+
+                // 3. Persist all parsed transactions in order
+                var importedCount = 0
+                val baseTimestamp = System.currentTimeMillis()
+                preview.transactions.forEachIndexed { idx, parsed ->
+                    val resolvedAccId = parsed.existingAccountId
+                        ?: accountIdByLower[parsed.accountName.trim().lowercase(Locale.US)]
+                        ?: return@forEachIndexed
+
+                    val resolvedToAccId = if (parsed.type == TransactionType.TRANSFER) {
+                        parsed.existingToAccountId
+                            ?: parsed.toAccountName?.trim()?.lowercase(Locale.US)?.let { accountIdByLower[it] }
+                    } else null
+
+                    val resolvedCatId = when (parsed.type) {
+                        TransactionType.EXPENSE -> parsed.existingCategoryId
+                            ?: parsed.categoryName?.trim()?.lowercase(Locale.US)?.let { expenseCatIdByLower[it] }
+                        TransactionType.INCOME -> parsed.existingCategoryId
+                            ?: parsed.categoryName?.trim()?.lowercase(Locale.US)?.let { incomeCatIdByLower[it] }
+                        TransactionType.TRANSFER -> null
+                    }
+
+                    val tx = LedgerTransaction(
+                        id = "",
+                        userId = currentUserId,
+                        type = parsed.type.name,
+                        amount = parsed.amount,
+                        feeAmount = parsed.feeAmount,
+                        epochDay = parsed.epochDay,
+                        timestampMillis = baseTimestamp + idx,
+                        accountId = resolvedAccId,
+                        toAccountId = resolvedToAccId,
+                        categoryId = resolvedCatId,
+                        subcategory = parsed.subcategory,
+                        note = parsed.note,
+                        tagging = parsed.tagging,
+                        description = parsed.description
+                    )
+                    repository.saveTransaction(currentUserId, null, tx).getOrThrow()
+                    importedCount++
+                }
+
+                _toastMessage.tryEmit("Imported $importedCount ledger ${if (importedCount == 1) "entry" else "entries"}")
+                onComplete(true)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Excel import failed", e)
+                _toastMessage.tryEmit(e.localizedMessage ?: "Failed to import Excel entries")
+                onComplete(false)
+            }
+        }
+    }
+
+    fun massUploadLedgers(
+        bundle: LedgerDataBundle,
+        preview: LedgerMasterUploadPreview,
+        groupNatureOverrides: Map<String, AccountNature> = emptyMap(),
+        onComplete: (Boolean) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            try {
+                // 1. Create any brand-new Account Groups first (using user-selected or inferred Asset/Liability nature)
+                val groupIdByLower = mutableMapOf<String, Pair<String, AccountNature>>()
+                bundle.accountGroups.sortedBy { it.archived }.forEach { grp ->
+                    groupIdByLower.putIfAbsent(grp.name.trim().lowercase(Locale.US), grp.id to grp.nature())
+                }
+
+                var nextGroupSort = (bundle.accountGroups.maxOfOrNull { it.sortOrder } ?: 0L) + 1L
+                preview.newGroups.forEach { proposal ->
+                    val key = proposal.name.trim().lowercase(Locale.US)
+                    if (!groupIdByLower.containsKey(key)) {
+                        val nature = groupNatureOverrides[proposal.name] ?: proposal.inferredNature
+                        val newGroupId = "grp_${UUID.randomUUID().toString().replace("-", "").take(12)}"
+                        repository.saveAccountGroup(
+                            userId = currentUserId,
+                            existingId = newGroupId,
+                            name = proposal.name.trim(),
+                            groupType = nature,
+                            sortOrder = nextGroupSort++
+                        ).getOrThrow()
+                        groupIdByLower[key] = newGroupId to nature
+                    }
+                }
+
+                // 2. Create all parsed Account ledgers and Expense/Income category ledgers
+                val palette = com.example.ui.theme.ChartColorHexes
+                var nextAccountSort = (bundle.accounts.maxOfOrNull { it.sortOrder } ?: 0L) + 1L
+                var nextCategorySort = (bundle.categories.maxOfOrNull { it.sortOrder } ?: 0L) + 1L
+                var colorIdx = bundle.categories.size
+                var createdCount = 0
+
+                val categoryById = bundle.categories.associateBy { it.id }.toMutableMap()
+                val updatedCategoryIds = mutableSetOf<String>()
+
+                preview.items.forEach { item ->
+                    when (item.kind) {
+                        LedgerUploadKind.ACCOUNT -> {
+                            val resolved = groupIdByLower[item.groupName.trim().lowercase(Locale.US)]
+                            val groupId = item.existingGroupId ?: resolved?.first ?: return@forEach
+                            val nature = resolved?.second ?: item.inferredNature
+                            repository.saveAccount(
+                                userId = currentUserId,
+                                existingId = null,
+                                groupId = groupId,
+                                name = item.ledgerName,
+                                initialBalance = 0.0,
+                                accountType = nature,
+                                note = null,
+                                sortOrder = nextAccountSort++,
+                                includeInNetWorth = true
+                            ).getOrThrow()
+                            createdCount++
+                        }
+
+                        LedgerUploadKind.EXPENSE_CATEGORY -> {
+                            repository.saveCategory(
+                                userId = currentUserId,
+                                existingId = null,
+                                name = item.ledgerName,
+                                type = CategoryType.EXPENSE,
+                                colorHex = palette[(colorIdx++) % palette.size],
+                                subcategories = emptyList(),
+                                sortOrder = nextCategorySort++
+                            ).getOrThrow()
+                            createdCount++
+                        }
+
+                        LedgerUploadKind.INCOME_CATEGORY -> {
+                            repository.saveCategory(
+                                userId = currentUserId,
+                                existingId = null,
+                                name = item.ledgerName,
+                                type = CategoryType.INCOME,
+                                colorHex = palette[(colorIdx++) % palette.size],
+                                subcategories = emptyList(),
+                                sortOrder = nextCategorySort++
+                            ).getOrThrow()
+                            createdCount++
+                        }
+
+                        LedgerUploadKind.EXPENSE_LEDGER, LedgerUploadKind.INCOME_LEDGER -> {
+                            val parentId = item.existingCategoryId ?: return@forEach
+                            val parent = categoryById[parentId] ?: return@forEach
+                            if (parent.subcategories.none { it.equals(item.ledgerName, ignoreCase = true) }) {
+                                categoryById[parentId] = parent.copy(
+                                    subcategories = parent.subcategories + item.ledgerName
+                                )
+                                updatedCategoryIds.add(parentId)
+                                createdCount++
+                            }
+                        }
+                    }
+                }
+
+                updatedCategoryIds.forEach { catId ->
+                    val updated = categoryById[catId] ?: return@forEach
+                    repository.saveCategory(
+                        userId = currentUserId,
+                        existingId = updated.id,
+                        name = updated.name,
+                        type = updated.categoryType(),
+                        colorHex = updated.colorHex,
+                        subcategories = updated.subcategories,
+                        sortOrder = updated.sortOrder
+                    ).getOrThrow()
+                }
+
+                if (updatedCategoryIds.isNotEmpty() && !bundle.settings.subcategoryEnabled) {
+                    val s = bundle.settings
+                    repository.updateSettings(
+                        userId = currentUserId,
+                        mainCurrencyCode = s.mainCurrencyCode,
+                        mainCurrencySymbol = s.mainCurrencySymbol,
+                        subcategoryEnabled = true,
+                        startScreen = s.startScreen,
+                        monthlyStartDate = s.monthlyStartDate,
+                        weeklyStartDay = s.weeklyStartDay
+                    )
+                }
+
+                _toastMessage.tryEmit("Uploaded $createdCount ${if (createdCount == 1) "ledger" else "ledgers"}")
+                onComplete(true)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Mass ledger upload failed", e)
+                _toastMessage.tryEmit(e.localizedMessage ?: "Failed to upload ledgers")
+                onComplete(false)
+            }
+        }
     }
 
     // --- Mutations ---
@@ -831,6 +1166,78 @@ class LedgerViewModel(
             repository.saveCategory(currentUserId, existingId, name, type, colorHex, subcategories, sortOrder)
                 .onSuccess { _toastMessage.tryEmit("Category saved") }
                 .onFailure { _toastMessage.tryEmit(it.localizedMessage ?: "Failed to save category") }
+        }
+    }
+
+    fun addCategoryLedger(
+        bundle: LedgerDataBundle,
+        categoryId: String,
+        ledgerName: String,
+        onComplete: (categoryId: String, ledgerName: String) -> Unit = { _, _ -> }
+    ) {
+        val cleanName = ledgerName.trim().take(60)
+        if (cleanName.isEmpty()) {
+            _toastMessage.tryEmit("Ledger name cannot be empty")
+            return
+        }
+        val category = bundle.categories.firstOrNull { it.id == categoryId }
+        if (category == null) {
+            _toastMessage.tryEmit("Please select a category")
+            return
+        }
+        if (category.subcategories.any { it.equals(cleanName, ignoreCase = true) }) {
+            _toastMessage.tryEmit("\"$cleanName\" already exists under ${category.name}")
+            onComplete(category.id, category.subcategories.first { it.equals(cleanName, ignoreCase = true) })
+            return
+        }
+        viewModelScope.launch {
+            val updatedSubs = category.subcategories + cleanName
+            repository.saveCategory(
+                userId = currentUserId,
+                existingId = category.id,
+                name = category.name,
+                type = category.categoryType(),
+                colorHex = category.colorHex,
+                subcategories = updatedSubs,
+                sortOrder = category.sortOrder
+            ).onSuccess {
+                if (!bundle.settings.subcategoryEnabled) {
+                    val s = bundle.settings
+                    repository.updateSettings(
+                        userId = currentUserId,
+                        mainCurrencyCode = s.mainCurrencyCode,
+                        mainCurrencySymbol = s.mainCurrencySymbol,
+                        subcategoryEnabled = true,
+                        startScreen = s.startScreen,
+                        monthlyStartDate = s.monthlyStartDate,
+                        weeklyStartDay = s.weeklyStartDay
+                    )
+                }
+                val kindLabel = if (category.categoryType() == CategoryType.INCOME) "Income" else "Expense"
+                _toastMessage.tryEmit("$kindLabel ledger \"$cleanName\" created under ${category.name}")
+                onComplete(category.id, cleanName)
+            }.onFailure {
+                _toastMessage.tryEmit(it.localizedMessage ?: "Failed to create ledger")
+            }
+        }
+    }
+
+    fun removeCategoryLedger(category: Category, ledgerName: String) {
+        viewModelScope.launch {
+            val updatedSubs = category.subcategories.filterNot { it.equals(ledgerName, ignoreCase = true) }
+            repository.saveCategory(
+                userId = currentUserId,
+                existingId = category.id,
+                name = category.name,
+                type = category.categoryType(),
+                colorHex = category.colorHex,
+                subcategories = updatedSubs,
+                sortOrder = category.sortOrder
+            ).onSuccess {
+                _toastMessage.tryEmit("Removed \"$ledgerName\" from ${category.name}")
+            }.onFailure {
+                _toastMessage.tryEmit(it.localizedMessage ?: "Failed to remove ledger")
+            }
         }
     }
 

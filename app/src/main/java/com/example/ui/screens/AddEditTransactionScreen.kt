@@ -32,6 +32,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -123,20 +124,24 @@ private data class CategorySuggestionItem(
 fun AddEditTransactionScreen(
     bundle: LedgerDataBundle,
     existing: LedgerTransaction?,
+    prefillType: TransactionType? = null,
+    prefillCategoryId: String? = null,
+    prefillSubcategory: String? = null,
     onBack: () -> Unit,
     onSave: (existingId: String?, tx: LedgerTransaction, keepOpen: Boolean) -> Unit,
     onCopy: ((LedgerTransaction) -> Unit)? = null,
     onDelete: ((String) -> Unit)? = null,
     onManageAccounts: () -> Unit,
-    onManageCategories: (CategoryType) -> Unit
+    onManageCategories: (CategoryType) -> Unit,
+    onCreateCategoryLedger: ((categoryId: String, ledgerName: String, onCreated: (String, String) -> Unit) -> Unit)? = null
 ) {
     BackHandler { onBack() }
 
     val focusManager = LocalFocusManager.current
     val symbol = bundle.settings.mainCurrencySymbol
 
-    var txType by remember(existing) {
-        mutableStateOf(existing?.txType() ?: TransactionType.EXPENSE)
+    var txType by remember(existing, prefillType) {
+        mutableStateOf(existing?.txType() ?: prefillType ?: TransactionType.EXPENSE)
     }
     var epochDay by remember(existing) {
         mutableStateOf(existing?.epochDay ?: LedgerFormatters.todayEpochDay())
@@ -147,11 +152,11 @@ fun AddEditTransactionScreen(
     var toAccountId by remember(existing) {
         mutableStateOf(existing?.toAccountId.orEmpty())
     }
-    var categoryId by remember(existing) {
-        mutableStateOf(existing?.categoryId.orEmpty())
+    var categoryId by remember(existing, prefillCategoryId) {
+        mutableStateOf(existing?.categoryId ?: prefillCategoryId.orEmpty())
     }
-    var subcategory by remember(existing) {
-        mutableStateOf(existing?.subcategory.orEmpty())
+    var subcategory by remember(existing, prefillSubcategory) {
+        mutableStateOf(existing?.subcategory ?: prefillSubcategory.orEmpty())
     }
 
     // Type-ahead input queries synced with selected account / category
@@ -163,13 +168,13 @@ fun AddEditTransactionScreen(
         val initialToId = existing?.toAccountId.orEmpty()
         mutableStateOf(if (initialToId.isNotBlank()) bundle.accountName(initialToId) else "")
     }
-    var categoryQuery by remember(existing) {
-        val initialCatId = existing?.categoryId.orEmpty()
-        val initialSub = existing?.subcategory.orEmpty()
+    var categoryQuery by remember(existing, prefillCategoryId, prefillSubcategory) {
+        val initialCatId = existing?.categoryId ?: prefillCategoryId.orEmpty()
+        val initialSub = existing?.subcategory ?: prefillSubcategory.orEmpty()
         val catName = bundle.categoryById(initialCatId)?.name.orEmpty()
         val label = when {
             catName.isBlank() -> ""
-            initialSub.isNotBlank() && bundle.settings.subcategoryEnabled -> "$catName / $initialSub"
+            initialSub.isNotBlank() && (bundle.settings.subcategoryEnabled || !prefillSubcategory.isNullOrBlank()) -> "$catName / $initialSub"
             else -> catName
         }
         mutableStateOf(label)
@@ -214,6 +219,9 @@ fun AddEditTransactionScreen(
     var showCopyDatePicker by remember { mutableStateOf(false) }
     var showRepeatDialog by remember { mutableStateOf(false) }
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+    var showCreateLedgerDialog by remember { mutableStateOf(false) }
+    var draftLedgerNameForDialog by remember { mutableStateOf("") }
+    var draftCategoryIdForDialog by remember { mutableStateOf<String?>(null) }
     var validationError by remember { mutableStateOf<String?>(null) }
 
     val accentColor = when (txType) {
@@ -393,18 +401,13 @@ fun AddEditTransactionScreen(
                 }
             }
             if (resolvedCategoryId.isBlank()) {
-                val fallbackCat = filteredCategories.firstOrNull()
-                if (fallbackCat == null) {
-                    validationError = "Please select a category"
-                    activePicker = ActivePicker.CATEGORY
-                    return null
+                validationError = if (txType == TransactionType.INCOME) {
+                    "Please select an income category or ledger"
                 } else {
-                    resolvedCategoryId = fallbackCat.id
-                    categoryId = fallbackCat.id
-                    subcategory = ""
-                    resolvedSubcategory = ""
-                    categoryQuery = fallbackCat.name
+                    "Please select an expense category or ledger"
                 }
+                activePicker = ActivePicker.CATEGORY
+                return null
             }
         }
 
@@ -423,7 +426,9 @@ fun AddEditTransactionScreen(
             accountId = resolvedAccountId,
             toAccountId = if (txType == TransactionType.TRANSFER) resolvedToAccountId else null,
             categoryId = if (txType != TransactionType.TRANSFER) resolvedCategoryId else null,
-            subcategory = if (txType != TransactionType.TRANSFER && bundle.settings.subcategoryEnabled) {
+            subcategory = if (txType != TransactionType.TRANSFER &&
+                (bundle.settings.subcategoryEnabled || resolvedSubcategory.isNotBlank())
+            ) {
                 resolvedSubcategory.takeIf { it.isNotBlank() }
             } else null,
             note = noteText.trim(),
@@ -995,9 +1000,9 @@ fun AddEditTransactionScreen(
                             if (categoryQuery.isEmpty()) {
                                 Text(
                                     text = if (txType == TransactionType.INCOME) {
-                                        "Type or select income category"
+                                        "Type or select income ledger"
                                     } else {
-                                        "Type or select expense category"
+                                        "Type or select expense ledger"
                                     },
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = LedgerTextMuted
@@ -1027,6 +1032,8 @@ fun AddEditTransactionScreen(
                         suggestions = filterCategorySuggestions(categoryQuery, hasTypedCategoryQuery),
                         selectedCategoryId = categoryId,
                         selectedSubcategory = subcategory,
+                        queryText = if (hasTypedCategoryQuery) categoryQuery else "",
+                        txType = txType,
                         accentColor = accentColor,
                         onSelect = { item ->
                             categoryId = item.categoryId
@@ -1036,6 +1043,15 @@ fun AddEditTransactionScreen(
                             showCategorySuggestions = false
                             focusManager.clearFocus()
                         },
+                        onCreateNewLedger = if (onCreateCategoryLedger != null) {
+                            { typedName ->
+                                draftLedgerNameForDialog = typedName
+                                draftCategoryIdForDialog = categoryId.takeIf { it.isNotBlank() }
+                                showCategorySuggestions = false
+                                focusManager.clearFocus()
+                                showCreateLedgerDialog = true
+                            }
+                        } else null,
                         onBrowseAll = { openPicker(ActivePicker.CATEGORY) }
                     )
                 }
@@ -1370,13 +1386,54 @@ fun AddEditTransactionScreen(
                             text = when (activePicker) {
                                 ActivePicker.ACCOUNT -> if (txType == TransactionType.TRANSFER) "From Account" else "Accounts"
                                 ActivePicker.TO_ACCOUNT -> "To Account"
-                                ActivePicker.CATEGORY -> "Categories"
+                                ActivePicker.CATEGORY -> if (txType == TransactionType.INCOME) {
+                                    "Income Categories & Ledgers"
+                                } else {
+                                    "Expense Categories & Ledgers"
+                                }
                                 ActivePicker.NONE -> ""
                             },
                             style = MaterialTheme.typography.titleSmall,
                             color = LedgerTextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )
+                        if (activePicker == ActivePicker.CATEGORY && onCreateCategoryLedger != null) {
+                            Surface(
+                                onClick = {
+                                    draftLedgerNameForDialog = ""
+                                    draftCategoryIdForDialog = expandedCategoryId
+                                        ?: categoryId.takeIf { it.isNotBlank() }
+                                    showCreateLedgerDialog = true
+                                },
+                                shape = RoundedCornerShape(7.dp),
+                                color = accentColor.copy(alpha = 0.18f),
+                                border = BorderStroke(1.dp, accentColor.copy(alpha = 0.55f)),
+                                modifier = Modifier
+                                    .padding(end = 4.dp)
+                                    .testTag("picker_create_category_ledger_button")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Add,
+                                        contentDescription = "Create ledger",
+                                        tint = accentColor,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = "Ledger",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = accentColor,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                        }
                         IconButton(
                             onClick = {
                                 if (activePicker == ActivePicker.CATEGORY) {
@@ -1594,6 +1651,37 @@ fun AddEditTransactionScreen(
                                                 )
                                             }
                                             HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                                        }
+                                        if (onCreateCategoryLedger != null) {
+                                            item {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .background(LedgerSurfaceElevated.copy(alpha = 0.6f))
+                                                        .clickable {
+                                                            draftLedgerNameForDialog = ""
+                                                            draftCategoryIdForDialog = selectedCat.id
+                                                            showCreateLedgerDialog = true
+                                                        }
+                                                        .padding(horizontal = 14.dp, vertical = 12.dp)
+                                                        .testTag("picker_add_ledger_under_${selectedCat.id}"),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Add,
+                                                        contentDescription = null,
+                                                        tint = accentColor,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text(
+                                                        text = "Add Ledger",
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        color = accentColor,
+                                                        fontWeight = FontWeight.SemiBold
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -1885,6 +1973,30 @@ fun AddEditTransactionScreen(
             }
         )
     }
+
+    if (showCreateLedgerDialog && onCreateCategoryLedger != null) {
+        CreateCategoryLedgerDialog(
+            bundle = bundle,
+            initialType = if (txType == TransactionType.INCOME) CategoryType.INCOME else CategoryType.EXPENSE,
+            initialCategoryId = draftCategoryIdForDialog ?: categoryId.takeIf { it.isNotBlank() },
+            initialLedgerName = draftLedgerNameForDialog,
+            lockType = true,
+            onDismiss = { showCreateLedgerDialog = false },
+            onConfirm = { targetCatId, newLedgerName ->
+                showCreateLedgerDialog = false
+                onCreateCategoryLedger(targetCatId, newLedgerName) { createdCatId, createdName ->
+                    categoryId = createdCatId
+                    subcategory = createdName
+                    val catName = bundle.categoryById(createdCatId)?.name.orEmpty()
+                    categoryQuery = if (catName.isNotBlank()) "$catName / $createdName" else createdName
+                    hasTypedCategoryQuery = false
+                    showCategorySuggestions = false
+                    activePicker = ActivePicker.NONE
+                    validationError = null
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -2032,10 +2144,21 @@ private fun CategorySuggestionList(
     suggestions: List<CategorySuggestionItem>,
     selectedCategoryId: String,
     selectedSubcategory: String,
+    queryText: String,
+    txType: TransactionType,
     accentColor: Color,
     onSelect: (CategorySuggestionItem) -> Unit,
+    onCreateNewLedger: ((String) -> Unit)?,
     onBrowseAll: () -> Unit
 ) {
+    val cleanQuery = queryText.trim()
+    val kindLabel = if (txType == TransactionType.INCOME) "Income" else "Expense"
+    val hasExactMatch = cleanQuery.isNotEmpty() && suggestions.any {
+        it.displayLabel.equals(cleanQuery, ignoreCase = true) ||
+            it.categoryName.equals(cleanQuery, ignoreCase = true) ||
+            (it.subcategory?.equals(cleanQuery, ignoreCase = true) == true)
+    }
+
     Surface(
         shape = RoundedCornerShape(10.dp),
         color = LedgerSurfaceElevated,
@@ -2048,7 +2171,7 @@ private fun CategorySuggestionList(
         Column(modifier = Modifier.fillMaxWidth()) {
             if (suggestions.isEmpty()) {
                 Text(
-                    text = "No matching categories found",
+                    text = "No matching ${kindLabel.lowercase()} ledgers found",
                     style = MaterialTheme.typography.bodySmall,
                     color = LedgerTextMuted,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
@@ -2088,6 +2211,38 @@ private fun CategorySuggestionList(
                     }
                 }
             }
+            if (onCreateNewLedger != null) {
+                HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(accentColor.copy(alpha = 0.08f))
+                        .clickable { onCreateNewLedger(if (hasExactMatch) "" else cleanQuery) }
+                        .padding(horizontal = 12.dp, vertical = 9.dp)
+                        .testTag("tx_create_category_ledger_suggestion_row"),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Add,
+                        contentDescription = null,
+                        tint = accentColor,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (cleanQuery.isNotEmpty() && !hasExactMatch) {
+                            "Create \"$cleanQuery\" as $kindLabel Ledger"
+                        } else {
+                            "Create New $kindLabel Ledger"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = accentColor,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
             HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
             Row(
                 modifier = Modifier
@@ -2100,15 +2255,15 @@ private fun CategorySuggestionList(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Browse all categories",
+                    text = "Browse all categories & ledgers",
                     style = MaterialTheme.typography.labelMedium,
-                    color = accentColor,
+                    color = LedgerTextSecondary,
                     fontWeight = FontWeight.SemiBold
                 )
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                     contentDescription = null,
-                    tint = accentColor,
+                    tint = LedgerTextSecondary,
                     modifier = Modifier.size(16.dp)
                 )
             }

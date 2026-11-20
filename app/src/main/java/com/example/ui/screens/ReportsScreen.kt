@@ -29,7 +29,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AccountBalance
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -63,6 +66,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.Account
+import com.example.data.AccountNature
 import com.example.data.ReportPeriodMode
 import com.example.ui.theme.LedgerAmber
 import com.example.ui.theme.LedgerBackground
@@ -82,6 +86,7 @@ import com.example.util.LedgerFormatters
 import com.example.viewmodel.CreditCardReportCalculator
 import com.example.viewmodel.LedgerDataBundle
 import com.example.viewmodel.LedgerViewModel
+import com.example.viewmodel.NetWorthAccountSnapshot
 import com.example.viewmodel.NetWorthPeriodPoint
 import java.util.Calendar
 import kotlin.math.abs
@@ -91,9 +96,9 @@ import kotlin.math.pow
 import kotlin.math.roundToLong
 
 /** Reports available in the Reports tab. */
-enum class ReportKind(val label: String, val subtitle: String) {
-    NET_WORTH("Net Worth", "Net Worth Summary"),
-    CREDIT_CARDS("Credit Cards", "Credit Card Spending & Dues")
+enum class ReportKind(val label: String) {
+    NET_WORTH("Net Worth"),
+    CREDIT_CARDS("Credit Cards")
 }
 
 @Composable
@@ -104,36 +109,30 @@ fun ReportsScreen(
     modifier: Modifier = Modifier
 ) {
     val symbol = bundle.settings.mainCurrencySymbol
-    val todayCal = remember { Calendar.getInstance() }
-    val currentYear = remember { todayCal.get(Calendar.YEAR) }
-    val currentMonth = remember { todayCal.get(Calendar.MONTH) }
 
     var periodMode by remember { mutableStateOf(ReportPeriodMode.MONTHLY) }
-    var anchorYear by remember { mutableIntStateOf(currentYear) }
-    var selectedIndex by remember { mutableIntStateOf(currentMonth) }
-    var accountsExpanded by remember { mutableStateOf(true) }
+    var showPeriodDropdown by remember { mutableStateOf(false) }
+    var selectedIndex by remember { mutableIntStateOf(-1) }
     var reportKind by remember { mutableStateOf(ReportKind.NET_WORTH) }
 
-    val creditCardReport = remember(bundle, periodMode, anchorYear) {
-        CreditCardReportCalculator.computeSeries(bundle, periodMode, anchorYear)
+    val series = remember(bundle, periodMode) {
+        viewModel.computeNetWorthSeries(bundle, periodMode)
     }
 
-    val series = remember(bundle, periodMode, anchorYear) {
-        viewModel.computeNetWorthSeries(bundle, periodMode, anchorYear)
-    }
-
-    LaunchedEffect(periodMode, anchorYear) {
-        selectedIndex = when (periodMode) {
-            ReportPeriodMode.MONTHLY -> if (anchorYear == currentYear) currentMonth else 11
-            ReportPeriodMode.YEARLY -> (series.size - 1).coerceAtLeast(0)
+    LaunchedEffect(periodMode, series.size) {
+        if (series.isNotEmpty()) {
+            selectedIndex = series.lastIndex
         }
     }
 
-    val safeSelectedIdx = selectedIndex.coerceIn(0, (series.size - 1).coerceAtLeast(0))
+    val safeSelectedIdx = if (selectedIndex in series.indices) {
+        selectedIndex
+    } else {
+        (series.size - 1).coerceAtLeast(0)
+    }
     val selectedPoint = series.getOrNull(safeSelectedIdx)
-
-    val accountSnapshots = remember(bundle, selectedPoint?.cutoffEpochDay) {
-        selectedPoint?.let { viewModel.computeNetWorthAccountSnapshots(bundle, it.cutoffEpochDay) }.orEmpty()
+    val creditCardReport = remember(bundle, periodMode, series) {
+        CreditCardReportCalculator.computeSeries(bundle, periodMode, series)
     }
     val creditCardSummaries = remember(bundle, creditCardReport, safeSelectedIdx) {
         val period = creditCardReport.periods.getOrNull(safeSelectedIdx)
@@ -142,7 +141,7 @@ fun ReportsScreen(
         )
     }
     val includedCount = bundle.netWorthIncludedAccounts.size
-    val excludedAccounts = bundle.netWorthExcludedAccounts
+    val excludedCount = bundle.netWorthExcludedAccounts.size
 
     Column(
         modifier = modifier
@@ -165,37 +164,77 @@ fun ReportsScreen(
                     color = LedgerTextPrimary
                 )
                 Text(
-                    text = reportKind.subtitle,
+                    text = when (reportKind) {
+                        ReportKind.NET_WORTH ->
+                            series.lastOrNull()?.let { "Net Worth • Till ${it.fullLabel}" } ?: "Net Worth Summary"
+                        ReportKind.CREDIT_CARDS -> "Credit Card Spending & Dues"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = LedgerTextSecondary
                 )
             }
 
-            // Monthly / Yearly Segmented Switcher
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = LedgerBackground,
-                border = BorderStroke(1.dp, LedgerBorder)
-            ) {
-                Row(modifier = Modifier.padding(3.dp)) {
+            // Monthly / Yearly Dropdown Selector
+            Box {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = LedgerSurfaceElevated,
+                    border = BorderStroke(1.dp, LedgerBorder),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { showPeriodDropdown = true }
+                        .testTag("reports_period_dropdown")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = periodMode.label,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = LedgerTextPrimary
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            imageVector = Icons.Filled.KeyboardArrowDown,
+                            contentDescription = "Select report period",
+                            tint = LedgerTextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+                DropdownMenu(
+                    expanded = showPeriodDropdown,
+                    onDismissRequest = { showPeriodDropdown = false },
+                    containerColor = LedgerSurfaceElevated
+                ) {
                     ReportPeriodMode.entries.forEach { mode ->
                         val active = periodMode == mode
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(7.dp))
-                                .background(if (active) LedgerCoral else Color.Transparent)
-                                .clickable { periodMode = mode }
-                                .padding(horizontal = 12.dp, vertical = 6.dp)
-                                .testTag("reports_mode_${mode.name.lowercase()}"),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = mode.label,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
-                                color = if (active) Color.White else LedgerTextSecondary
-                            )
-                        }
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = mode.label,
+                                    color = if (active) LedgerCoral else LedgerTextPrimary,
+                                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal
+                                )
+                            },
+                            trailingIcon = if (active) {
+                                {
+                                    Icon(
+                                        imageVector = Icons.Filled.Check,
+                                        contentDescription = "Selected",
+                                        tint = LedgerCoral,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            } else null,
+                            onClick = {
+                                periodMode = mode
+                                showPeriodDropdown = false
+                            },
+                            modifier = Modifier.testTag("reports_mode_${mode.name.lowercase()}")
+                        )
                     }
                 }
             }
@@ -207,7 +246,7 @@ fun ReportsScreen(
                 .fillMaxWidth()
                 .background(LedgerSurface)
                 .horizontalScroll(rememberScrollState())
-                .padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+                .padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             ReportKind.entries.forEach { kind ->
@@ -232,58 +271,13 @@ fun ReportsScreen(
             }
         }
 
-        // Period Range Navigator (< 2026 > or < 2021 – 2026 >)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(LedgerSurface)
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            IconButton(
-                onClick = {
-                    anchorYear -= if (periodMode == ReportPeriodMode.MONTHLY) 1 else 6
-                },
-                modifier = Modifier.testTag("reports_prev_period")
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                    contentDescription = "Previous period",
-                    tint = LedgerTextPrimary
-                )
-            }
-            Text(
-                text = if (periodMode == ReportPeriodMode.MONTHLY) {
-                    "$anchorYear"
-                } else {
-                    "${anchorYear - 5} – $anchorYear"
-                },
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = LedgerTextPrimary
-            )
-            IconButton(
-                onClick = {
-                    anchorYear += if (periodMode == ReportPeriodMode.MONTHLY) 1 else 6
-                },
-                modifier = Modifier.testTag("reports_next_period")
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = "Next period",
-                    tint = LedgerTextPrimary
-                )
-            }
-        }
-
         HorizontalDivider(color = LedgerDivider, thickness = 1.dp)
 
         if (reportKind == ReportKind.CREDIT_CARDS) {
             CreditCardReportContent(
                 hasCards = creditCardReport.cards.isNotEmpty(),
                 periods = creditCardReport.periods,
-                selectedIndex = safeSelectedIdx.coerceIn(0, (creditCardReport.periods.size - 1).coerceAtLeast(0)),
+                selectedIndex = safeSelectedIdx,
                 summaries = creditCardSummaries,
                 symbol = symbol,
                 mode = periodMode,
@@ -330,7 +324,7 @@ fun ReportsScreen(
                             point = selectedPoint,
                             symbol = symbol,
                             includedCount = includedCount,
-                            excludedCount = excludedAccounts.size
+                            excludedCount = excludedCount
                         )
                     }
                 }
@@ -355,119 +349,6 @@ fun ReportsScreen(
                         mode = periodMode,
                         onSelectIndex = { idx -> selectedIndex = idx }
                     )
-                }
-
-                // Included Accounts Snapshot Card (Collapsible)
-                item(key = "included_accounts_header") {
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = LedgerSurface,
-                        border = BorderStroke(1.dp, LedgerDivider),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { accountsExpanded = !accountsExpanded }
-                                    .padding(horizontal = 14.dp, vertical = 12.dp)
-                                    .testTag("reports_accounts_toggle"),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = if (accountsExpanded) {
-                                            Icons.Filled.KeyboardArrowDown
-                                        } else {
-                                            Icons.AutoMirrored.Filled.KeyboardArrowRight
-                                        },
-                                        contentDescription = if (accountsExpanded) "Collapse accounts" else "Expand accounts",
-                                        tint = LedgerTextMuted,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Column {
-                                        Text(
-                                            text = "Accounts Included in Net Worth ($includedCount)",
-                                            style = MaterialTheme.typography.titleSmall,
-                                            color = LedgerTextPrimary
-                                        )
-                                        selectedPoint?.let { pt ->
-                                            Text(
-                                                text = "Balances as of ${pt.fullLabel}",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = LedgerTextMuted
-                                            )
-                                        }
-                                    }
-                                }
-                                if (selectedPoint != null) {
-                                    Text(
-                                        text = LedgerFormatters.formatSignedWhole(selectedPoint.netWorth, symbol),
-                                        style = TabularAmountStyle.copy(fontSize = 13.sp, fontWeight = FontWeight.Bold),
-                                        color = if (selectedPoint.netWorth.roundToLong() < 0L) LedgerCoral else LedgerAmber
-                                    )
-                                }
-                            }
-
-                            if (accountsExpanded) {
-                                HorizontalDivider(color = LedgerDivider)
-                                if (accountSnapshots.isEmpty()) {
-                                    Text(
-                                        text = "No accounts are currently included in Net Worth. Edit an account to include it.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = LedgerTextMuted,
-                                        modifier = Modifier.padding(14.dp)
-                                    )
-                                } else {
-                                    accountSnapshots.forEachIndexed { index, snap ->
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clickable { onSelectAccount(snap.account) }
-                                                .padding(horizontal = 14.dp, vertical = 11.dp),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
-                                                Text(
-                                                    text = snap.account.name,
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                    color = LedgerTextPrimary,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                                Text(
-                                                    text = snap.groupName,
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = LedgerTextMuted
-                                                )
-                                            }
-                                            Text(
-                                                text = LedgerFormatters.formatSignedWhole(snap.balance, symbol),
-                                                style = TabularAmountStyle.copy(fontSize = 13.5.sp),
-                                                color = if (snap.balance.roundToLong() < 0L) LedgerCoral else LedgerBlue
-                                            )
-                                        }
-                                        if (index < accountSnapshots.lastIndex) {
-                                            HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
-                                        }
-                                    }
-                                }
-
-                                if (excludedAccounts.isNotEmpty()) {
-                                    HorizontalDivider(color = LedgerDivider)
-                                    Text(
-                                        text = "Excluded from Net Worth: ${excludedAccounts.joinToString(", ") { it.name }}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = LedgerTextMuted,
-                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -614,15 +495,19 @@ private fun NetWorthChartCard(
 
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Tap a bar to inspect that ${if (mode == ReportPeriodMode.MONTHLY) "month" else "year"}",
+                text = "Latest on right • scroll horizontally for earlier ${if (mode == ReportPeriodMode.MONTHLY) "months" else "years"}",
                 style = MaterialTheme.typography.labelSmall,
                 color = LedgerTextMuted
             )
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            val maxPosRaw = series.maxOfOrNull { max(it.assets, max(it.netWorth, 0.0)) } ?: 0.0
-            val maxNegRaw = series.maxOfOrNull { max(it.liabilities, max(-it.netWorth, 0.0)) } ?: 0.0
+            val maxPosRaw = series.maxOfOrNull {
+                maxOf(it.assets, -it.liabilities, it.netWorth, 0.0)
+            } ?: 0.0
+            val maxNegRaw = series.maxOfOrNull {
+                maxOf(it.liabilities, -it.assets, -it.netWorth, 0.0)
+            } ?: 0.0
             val nicePos = niceCeiling(maxPosRaw)
             val niceNeg = if (maxNegRaw > 0.5) niceCeiling(maxNegRaw) else 0.0
             val totalSpan = (nicePos + niceNeg).coerceAtLeast(1.0)
@@ -630,6 +515,15 @@ private fun NetWorthChartCard(
 
             val chartHeight = 220.dp
             val scrollState = rememberScrollState()
+            val autoScrollKey = "${mode.name}_${series.size}_${series.lastOrNull()?.key}"
+            var lastAutoScrolledKey by remember { mutableStateOf("") }
+
+            LaunchedEffect(autoScrollKey, scrollState.maxValue) {
+                if (lastAutoScrolledKey != autoScrollKey && scrollState.maxValue < Int.MAX_VALUE) {
+                    scrollState.scrollTo(scrollState.maxValue)
+                    lastAutoScrolledKey = autoScrollKey
+                }
+            }
 
             Row(
                 modifier = Modifier
@@ -692,9 +586,9 @@ private fun NetWorthChartCard(
                         .fillMaxHeight()
                 ) {
                     val slotWidthDp = if (mode == ReportPeriodMode.MONTHLY) {
-                        maxOf(42.dp, maxWidth / series.size.coerceAtLeast(1))
-                    } else {
                         maxOf(54.dp, maxWidth / series.size.coerceAtLeast(1))
+                    } else {
+                        maxOf(58.dp, maxWidth / series.size.coerceAtLeast(1))
                     }
                     val totalChartWidth = slotWidthDp * series.size.coerceAtLeast(1)
 
@@ -768,28 +662,41 @@ private fun NetWorthChartCard(
                                 )
                             }
 
-                            // Draw Assets (Blue upward) & Liabilities (Coral downward) split bars
+                            // Draw Assets (Blue) & Liabilities (Coral) split bars by ledger group
                             val netPoints = ArrayList<Offset>(series.size)
                             series.forEachIndexed { idx, pt ->
                                 val centerX = idx * slotPx + slotPx / 2f
                                 val barLeft = centerX - barWidth / 2f
 
-                                val assetH = (pt.assets.toFloat() * pxPerUnit).coerceAtLeast(0f)
-                                if (assetH > 0.5f) {
+                                val assetVal = pt.assets.toFloat()
+                                val liabVal = pt.liabilities.toFloat()
+                                val assetPx = abs(assetVal) * pxPerUnit
+                                val liabPx = abs(liabVal) * pxPerUnit
+
+                                // Determine if both bars share the same vertical side of zero
+                                val bothUp = assetVal > 0f && liabVal < 0f
+                                val bothDown = assetVal < 0f && liabVal > 0f
+                                val splitSideBySide = (bothUp || bothDown) && assetPx > 0.5f && liabPx > 0.5f
+                                val subBarW = if (splitSideBySide) (barWidth - 2.dp.toPx()) / 2f else barWidth
+                                val assetLeft = if (splitSideBySide) barLeft else barLeft
+                                val liabLeft = if (splitSideBySide) barLeft + subBarW + 2.dp.toPx() else barLeft
+
+                                if (assetPx > 0.5f) {
+                                    val topY = if (assetVal >= 0f) zeroY - assetPx else zeroY
                                     drawRoundRect(
                                         color = if (idx == selectedIndex) LedgerBlue else LedgerBlue.copy(alpha = 0.78f),
-                                        topLeft = Offset(barLeft, zeroY - assetH),
-                                        size = Size(barWidth, assetH),
+                                        topLeft = Offset(assetLeft, topY),
+                                        size = Size(subBarW, assetPx),
                                         cornerRadius = CornerRadius(cornerPx, cornerPx)
                                     )
                                 }
 
-                                val liabH = (pt.liabilities.toFloat() * pxPerUnit).coerceAtLeast(0f)
-                                if (liabH > 0.5f) {
+                                if (liabPx > 0.5f) {
+                                    val topY = if (liabVal >= 0f) zeroY else zeroY - liabPx
                                     drawRoundRect(
                                         color = if (idx == selectedIndex) LedgerCoral else LedgerCoral.copy(alpha = 0.80f),
-                                        topLeft = Offset(barLeft, zeroY),
-                                        size = Size(barWidth, liabH),
+                                        topLeft = Offset(liabLeft, topY),
+                                        size = Size(subBarW, liabPx),
                                         cornerRadius = CornerRadius(cornerPx, cornerPx)
                                     )
                                 }
@@ -941,7 +848,10 @@ private fun NetWorthPeriodTableCard(
             }
             HorizontalDivider(color = LedgerDivider)
 
-            series.forEachIndexed { idx, pt ->
+            // Display latest period first so users see current data immediately and scroll down for history
+            val displayIndices = series.indices.reversed().toList()
+            displayIndices.forEachIndexed { rowPos, idx ->
+                val pt = series[idx]
                 val isSel = idx == selectedIndex
                 Row(
                     modifier = Modifier
@@ -972,7 +882,7 @@ private fun NetWorthPeriodTableCard(
                     Text(
                         text = LedgerFormatters.formatWholeAmount(pt.liabilities, symbol, includeSymbol = false),
                         style = TabularAmountStyle.copy(fontSize = 12.sp),
-                        color = if (pt.liabilities.roundToLong() > 0L) LedgerCoral else LedgerTextMuted,
+                        color = if (pt.liabilities.roundToLong() != 0L) LedgerCoral else LedgerTextMuted,
                         textAlign = TextAlign.End,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -991,7 +901,7 @@ private fun NetWorthPeriodTableCard(
                         modifier = Modifier.weight(1.1f)
                     )
                 }
-                if (idx < series.lastIndex) {
+                if (rowPos < displayIndices.lastIndex) {
                     HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
                 }
             }

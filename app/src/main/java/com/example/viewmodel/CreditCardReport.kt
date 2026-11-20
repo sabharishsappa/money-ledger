@@ -46,8 +46,6 @@ data class CreditCardReport(
 
 object CreditCardReportCalculator {
 
-    private val monthNames = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
-
     /**
      * A credit card is an active liability account whose group or name mentions a card
      * (the default "Credit Cards" group, or anything like "HDFC Card").
@@ -64,26 +62,41 @@ object CreditCardReportCalculator {
         }.sortedWith(compareBy({ groupsById[it.groupId]?.sortOrder ?: 0L }, { it.sortOrder }, { it.name }))
     }
 
+    /**
+     * Builds credit card totals for the same months/years as the Net Worth series, so both reports
+     * share one period list and one selected index.
+     */
     fun computeSeries(
         bundle: LedgerDataBundle,
         mode: ReportPeriodMode,
-        anchorYear: Int
+        netWorthSeries: List<NetWorthPeriodPoint>
     ): CreditCardReport {
         val cards = creditCardAccounts(bundle)
-        val periods = periodRanges(mode, anchorYear).map { (key, labels, range) ->
-            val summaries = summarize(bundle, cards, range.first, range.last)
+        val periods = netWorthSeries.map { pt ->
+            val start = periodStart(mode, pt)
+            val summaries = summarize(bundle, cards, start, pt.cutoffEpochDay)
             CreditCardPeriodPoint(
-                key = key,
-                shortLabel = labels.first,
-                fullLabel = labels.second,
-                startEpochDay = range.first,
-                endEpochDay = range.last,
+                key = pt.key,
+                shortLabel = pt.shortLabel,
+                fullLabel = pt.fullLabel,
+                startEpochDay = start,
+                endEpochDay = pt.cutoffEpochDay,
                 spent = summaries.sumOf { it.spent },
                 paid = summaries.sumOf { it.paid },
                 outstanding = summaries.sumOf { it.outstanding }
             )
         }
         return CreditCardReport(cards, periods)
+    }
+
+    /** First day of the month or year that ends at this Net Worth point's cutoff. */
+    private fun periodStart(mode: ReportPeriodMode, pt: NetWorthPeriodPoint): Long {
+        val cal = LedgerFormatters.epochDayToCalendar(pt.cutoffEpochDay)
+        val year = cal.get(java.util.Calendar.YEAR)
+        return when (mode) {
+            ReportPeriodMode.MONTHLY -> LedgerFormatters.calendarToEpochDay(year, cal.get(java.util.Calendar.MONTH), 1)
+            ReportPeriodMode.YEARLY -> LedgerFormatters.calendarToEpochDay(year, 0, 1)
+        }
     }
 
     fun summarize(
@@ -159,22 +172,6 @@ object CreditCardReportCalculator {
                 transactionCount = count,
                 topCategories = topCategories
             )
-        }
-    }
-
-    private fun periodRanges(
-        mode: ReportPeriodMode,
-        anchorYear: Int
-    ): List<Triple<String, Pair<String, String>, LongRange>> = when (mode) {
-        ReportPeriodMode.MONTHLY -> (0..11).map { m ->
-            val start = LedgerFormatters.calendarToEpochDay(anchorYear, m, 1)
-            val end = LedgerFormatters.calendarToEpochDay(anchorYear, m, LedgerFormatters.daysInMonth(anchorYear, m))
-            Triple("$anchorYear-$m", monthNames[m] to "${monthNames[m]} $anchorYear", start..end)
-        }
-        ReportPeriodMode.YEARLY -> ((anchorYear - 5)..anchorYear).map { y ->
-            val start = LedgerFormatters.calendarToEpochDay(y, 0, 1)
-            val end = LedgerFormatters.calendarToEpochDay(y, 11, 31)
-            Triple("$y", "$y" to "Year $y", start..end)
         }
     }
 }

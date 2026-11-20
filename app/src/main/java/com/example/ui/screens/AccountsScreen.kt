@@ -110,6 +110,8 @@ fun AccountsScreen(
     onSelectAccount: (Account) -> Unit,
     onOpenAccountsSetting: () -> Unit,
     onOpenAccountGroups: () -> Unit,
+    onMassUploadLedgers: () -> Unit,
+    onCreateCategoryLedger: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val symbol = bundle.settings.mainCurrencySymbol
@@ -244,6 +246,28 @@ fun AccountsScreen(
                             onOpenAccountGroups()
                         }
                     )
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text = "Create Expense / Income Ledger",
+                                color = LedgerCoral,
+                                fontWeight = FontWeight.Medium
+                            )
+                        },
+                        onClick = {
+                            showOverflowMenu = false
+                            onCreateCategoryLedger()
+                        },
+                        modifier = Modifier.testTag("accounts_create_category_ledger_item")
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Mass Upload Ledgers", color = LedgerBlue, fontWeight = FontWeight.Medium) },
+                        onClick = {
+                            showOverflowMenu = false
+                            onMassUploadLedgers()
+                        },
+                        modifier = Modifier.testTag("accounts_mass_upload_menu_item")
+                    )
                 }
             }
         }
@@ -277,8 +301,10 @@ fun AccountsScreen(
         }
 
         if (showSummaryBreakdown) {
-            val totalMagnitude = (bundle.totalAssets + bundle.totalLiabilities).coerceAtLeast(1.0)
-            val assetFraction = (bundle.totalAssets / totalMagnitude).toFloat().coerceIn(0f, 1f)
+            val posAssets = bundle.totalAssets.coerceAtLeast(0.0)
+            val posLiabilities = bundle.totalLiabilities.coerceAtLeast(0.0)
+            val totalMagnitude = (posAssets + posLiabilities).coerceAtLeast(1.0)
+            val assetFraction = (posAssets / totalMagnitude).toFloat().coerceIn(0f, 1f)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()

@@ -194,6 +194,8 @@ object LedgerExcelExporter {
         return sb.toString()
     }
 
+    fun templateFileName(): String = "MoneyLedger_Import_Template.xlsx"
+
     fun generateXlsxBytes(bundle: LedgerDataBundle): ByteArray {
         val baos = ByteArrayOutputStream()
         writeXlsx(bundle, baos)
@@ -201,7 +203,14 @@ object LedgerExcelExporter {
     }
 
     fun writeXlsx(bundle: LedgerDataBundle, outputStream: OutputStream) {
-        val rows = buildDoubleEntryRows(bundle)
+        writeXlsxRows(buildDoubleEntryRows(bundle), outputStream)
+    }
+
+    fun writeBlankTemplateXlsx(outputStream: OutputStream) {
+        writeXlsxRows(emptyList(), outputStream)
+    }
+
+    private fun writeXlsxRows(rows: List<DoubleEntryExportRow>, outputStream: OutputStream) {
         ZipOutputStream(outputStream).use { zip ->
             writeZipEntry(zip, "[Content_Types].xml", CONTENT_TYPES_XML)
             writeZipEntry(zip, "_rels/.rels", ROOT_RELS_XML)
