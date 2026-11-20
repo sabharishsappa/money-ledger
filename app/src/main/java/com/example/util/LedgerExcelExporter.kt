@@ -12,13 +12,15 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.math.abs
 
-data class DoubleEntryExportRow(
-    val date: String,
-    val account: String,
+data class TransactionExportRow(
+    val dateOfTransaction: String,
+    val fromAccount: String,
+    val toAccount: String,
     val note: String,
     val tag: String,
     val description: String,
-    val amount: Double
+    val amount: Double,
+    val txType: TransactionType = TransactionType.EXPENSE
 )
 
 object LedgerExcelExporter {
@@ -31,22 +33,21 @@ object LedgerExcelExporter {
     }
 
     /**
-     * Converts every ledger transaction into balanced double-entry lines:
-     * - Debit line = +amount
-     * - Credit line = -amount
+     * Converts every ledger transaction into single-row accounting format:
+     * Columns: Date of Transaction | From Account (Credit) | To Account (Debit) | Note | Tag | Description | Amount
      *
      * Rules:
-     * - Expense:  Debit = Expense Category (+), Credit = Account (-)
-     * - Income:   Debit = Account (+),          Credit = Income Category (-)
-     * - Transfer: Debit = To Account (+),       Credit = From Account (-)
-     *   (If a transfer has feeAmount > 0, emits an additional Debit "Transfer Fee" (+) / Credit From Account (-) pair.)
+     * - Expense:  From Account = Payment Account (Credit), To Account = Expense Ledger (Debit)
+     * - Income:   From Account = Income Ledger (Credit),   To Account = Receiving Account (Debit)
+     * - Transfer: From Account = Source Account (Credit),  To Account = Destination Account (Debit)
+     *   (If a transfer has feeAmount > 0, emits an additional row: From Account = Source Account, To Account = "Transfer Fee".)
      */
-    fun buildDoubleEntryRows(bundle: LedgerDataBundle): List<DoubleEntryExportRow> {
+    fun buildExportRows(bundle: LedgerDataBundle): List<TransactionExportRow> {
         val sortedTx = bundle.transactions.sortedWith(
             compareBy<LedgerTransaction> { it.epochDay }.thenBy { it.timestampMillis }
         )
 
-        val rows = ArrayList<DoubleEntryExportRow>(sortedTx.size * 2)
+        val rows = ArrayList<TransactionExportRow>(sortedTx.size)
         sortedTx.forEach { tx ->
             val dateStr = formatExportDate(tx.epochDay)
             val noteStr = tx.note.trim()
@@ -66,55 +67,37 @@ object LedgerExcelExporter {
 
             when (tx.txType()) {
                 TransactionType.EXPENSE -> {
-                    val expenseCategory = categoryLabel("Expense")
+                    val expenseLedger = categoryLabel("Expense")
                     val accountName = bundle.accountName(tx.accountId)
-                    // Debit: Expense category (+amount)
+                    // Expense: Account is Credit (From Account), Expense Ledger is Debit (To Account)
                     rows.add(
-                        DoubleEntryExportRow(
-                            date = dateStr,
-                            account = expenseCategory,
+                        TransactionExportRow(
+                            dateOfTransaction = dateStr,
+                            fromAccount = accountName,
+                            toAccount = expenseLedger,
                             note = noteStr,
                             tag = tagStr,
                             description = descStr,
-                            amount = amt
-                        )
-                    )
-                    // Credit: Account (-amount)
-                    rows.add(
-                        DoubleEntryExportRow(
-                            date = dateStr,
-                            account = accountName,
-                            note = noteStr,
-                            tag = tagStr,
-                            description = descStr,
-                            amount = -amt
+                            amount = amt,
+                            txType = TransactionType.EXPENSE
                         )
                     )
                 }
 
                 TransactionType.INCOME -> {
                     val accountName = bundle.accountName(tx.accountId)
-                    val incomeCategory = categoryLabel("Income")
-                    // Debit: Account (+amount)
+                    val incomeLedger = categoryLabel("Income")
+                    // Income: Income Ledger is Credit (From Account), Account is Debit (To Account)
                     rows.add(
-                        DoubleEntryExportRow(
-                            date = dateStr,
-                            account = accountName,
+                        TransactionExportRow(
+                            dateOfTransaction = dateStr,
+                            fromAccount = incomeLedger,
+                            toAccount = accountName,
                             note = noteStr,
                             tag = tagStr,
                             description = descStr,
-                            amount = amt
-                        )
-                    )
-                    // Credit: Income category (-amount)
-                    rows.add(
-                        DoubleEntryExportRow(
-                            date = dateStr,
-                            account = incomeCategory,
-                            note = noteStr,
-                            tag = tagStr,
-                            description = descStr,
-                            amount = -amt
+                            amount = amt,
+                            txType = TransactionType.INCOME
                         )
                     )
                 }
@@ -122,49 +105,32 @@ object LedgerExcelExporter {
                 TransactionType.TRANSFER -> {
                     val fromAccount = bundle.accountName(tx.accountId)
                     val toAccount = tx.toAccountId?.let { bundle.accountName(it) } ?: "To Account"
-                    // Debit: To Account (+amount)
+                    // Transfer: Source Account is Credit (From Account), Destination Account is Debit (To Account)
                     rows.add(
-                        DoubleEntryExportRow(
-                            date = dateStr,
-                            account = toAccount,
+                        TransactionExportRow(
+                            dateOfTransaction = dateStr,
+                            fromAccount = fromAccount,
+                            toAccount = toAccount,
                             note = noteStr,
                             tag = tagStr,
                             description = descStr,
-                            amount = amt
-                        )
-                    )
-                    // Credit: From Account (-amount)
-                    rows.add(
-                        DoubleEntryExportRow(
-                            date = dateStr,
-                            account = fromAccount,
-                            note = noteStr,
-                            tag = tagStr,
-                            description = descStr,
-                            amount = -amt
+                            amount = amt,
+                            txType = TransactionType.TRANSFER
                         )
                     )
                     if (tx.feeAmount > 0.0) {
                         val fee = abs(tx.feeAmount)
                         val feeNote = if (noteStr.isNotEmpty()) "$noteStr (Fee)" else "Transfer Fee"
                         rows.add(
-                            DoubleEntryExportRow(
-                                date = dateStr,
-                                account = "Transfer Fee",
+                            TransactionExportRow(
+                                dateOfTransaction = dateStr,
+                                fromAccount = fromAccount,
+                                toAccount = "Transfer Fee",
                                 note = feeNote,
                                 tag = tagStr,
                                 description = descStr,
-                                amount = fee
-                            )
-                        )
-                        rows.add(
-                            DoubleEntryExportRow(
-                                date = dateStr,
-                                account = fromAccount,
-                                note = feeNote,
-                                tag = tagStr,
-                                description = descStr,
-                                amount = -fee
+                                amount = fee,
+                                txType = TransactionType.EXPENSE
                             )
                         )
                     }
@@ -174,16 +140,17 @@ object LedgerExcelExporter {
         return rows
     }
 
-    fun buildDoubleEntryCsv(bundle: LedgerDataBundle): String {
-        val rows = buildDoubleEntryRows(bundle)
+    fun buildCsv(bundle: LedgerDataBundle): String {
+        val rows = buildExportRows(bundle)
         val sb = StringBuilder()
-        sb.appendLine("Date,Account,Note,Tag,Description / Remarks,Amount")
+        sb.appendLine("Date of Transaction,From Account,To Account,Note,Tag,Description,Amount")
         fun esc(s: String) = "\"${s.replace("\"", "\"\"")}\""
         rows.forEach { row ->
             sb.appendLine(
                 listOf(
-                    esc(row.date),
-                    esc(row.account),
+                    esc(row.dateOfTransaction),
+                    esc(row.fromAccount),
+                    esc(row.toAccount),
                     esc(row.note),
                     esc(row.tag),
                     esc(row.description),
@@ -203,14 +170,14 @@ object LedgerExcelExporter {
     }
 
     fun writeXlsx(bundle: LedgerDataBundle, outputStream: OutputStream) {
-        writeXlsxRows(buildDoubleEntryRows(bundle), outputStream)
+        writeXlsxRows(buildExportRows(bundle), outputStream)
     }
 
     fun writeBlankTemplateXlsx(outputStream: OutputStream) {
         writeXlsxRows(emptyList(), outputStream)
     }
 
-    private fun writeXlsxRows(rows: List<DoubleEntryExportRow>, outputStream: OutputStream) {
+    private fun writeXlsxRows(rows: List<TransactionExportRow>, outputStream: OutputStream) {
         ZipOutputStream(outputStream).use { zip ->
             writeZipEntry(zip, "[Content_Types].xml", CONTENT_TYPES_XML)
             writeZipEntry(zip, "_rels/.rels", ROOT_RELS_XML)
@@ -240,12 +207,12 @@ object LedgerExcelExporter {
         }
     }
 
-    private fun buildWorksheetXml(rows: List<DoubleEntryExportRow>): String {
+    private fun buildWorksheetXml(rows: List<TransactionExportRow>): String {
         val totalRows = rows.size + 1
-        val sb = StringBuilder(rows.size * 240 + 1024)
+        val sb = StringBuilder(rows.size * 280 + 1024)
         sb.append("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""")
         sb.append("""<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">""")
-        sb.append("""<dimension ref="A1:F$totalRows"/>""")
+        sb.append("""<dimension ref="A1:G$totalRows"/>""")
         sb.append(
             """<sheetViews><sheetView tabSelected="1" workbookViewId="0">""" +
                 """<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>""" +
@@ -254,42 +221,49 @@ object LedgerExcelExporter {
         sb.append("""<sheetFormatPr defaultRowHeight="20"/>""")
         sb.append(
             """<cols>""" +
-                """<col min="1" max="1" width="14" customWidth="1"/>""" +
+                """<col min="1" max="1" width="20" customWidth="1"/>""" +
                 """<col min="2" max="2" width="26" customWidth="1"/>""" +
                 """<col min="3" max="3" width="26" customWidth="1"/>""" +
-                """<col min="4" max="4" width="16" customWidth="1"/>""" +
-                """<col min="5" max="5" width="32" customWidth="1"/>""" +
-                """<col min="6" max="6" width="16" customWidth="1"/>""" +
+                """<col min="4" max="4" width="24" customWidth="1"/>""" +
+                """<col min="5" max="5" width="16" customWidth="1"/>""" +
+                """<col min="6" max="6" width="30" customWidth="1"/>""" +
+                """<col min="7" max="7" width="16" customWidth="1"/>""" +
                 """</cols>"""
         )
         sb.append("""<sheetData>""")
 
         // Row 1: Header
         sb.append("""<row r="1" ht="24" customHeight="1">""")
-        appendInlineStrCell(sb, "A1", 1, "Date")
-        appendInlineStrCell(sb, "B1", 1, "Account")
-        appendInlineStrCell(sb, "C1", 1, "Note")
-        appendInlineStrCell(sb, "D1", 1, "Tag")
-        appendInlineStrCell(sb, "E1", 1, "Description / Remarks")
-        appendInlineStrCell(sb, "F1", 1, "Amount")
+        appendInlineStrCell(sb, "A1", 1, "Date of Transaction")
+        appendInlineStrCell(sb, "B1", 1, "From Account")
+        appendInlineStrCell(sb, "C1", 1, "To Account")
+        appendInlineStrCell(sb, "D1", 1, "Note")
+        appendInlineStrCell(sb, "E1", 1, "Tag")
+        appendInlineStrCell(sb, "F1", 1, "Description")
+        appendInlineStrCell(sb, "G1", 1, "Amount")
         sb.append("""</row>""")
 
-        // Data rows (2 rows per transaction: Debit + and Credit -)
+        // Data rows (1 row per transaction: From Account = Credit, To Account = Debit)
         rows.forEachIndexed { index, row ->
             val r = index + 2
-            val amountStyle = if (row.amount >= 0.0) 2 else 3
+            val amountStyle = when (row.txType) {
+                TransactionType.INCOME -> 2
+                TransactionType.EXPENSE -> 3
+                TransactionType.TRANSFER -> 4
+            }
             sb.append("""<row r="$r">""")
-            appendInlineStrCell(sb, "A$r", 0, row.date)
-            appendInlineStrCell(sb, "B$r", 0, row.account)
-            appendInlineStrCell(sb, "C$r", 0, row.note)
-            appendInlineStrCell(sb, "D$r", 0, row.tag)
-            appendInlineStrCell(sb, "E$r", 0, row.description)
-            sb.append("""<c r="F$r" s="$amountStyle"><v>${formatPlainNumeric(row.amount)}</v></c>""")
+            appendInlineStrCell(sb, "A$r", 0, row.dateOfTransaction)
+            appendInlineStrCell(sb, "B$r", 0, row.fromAccount)
+            appendInlineStrCell(sb, "C$r", 0, row.toAccount)
+            appendInlineStrCell(sb, "D$r", 0, row.note)
+            appendInlineStrCell(sb, "E$r", 0, row.tag)
+            appendInlineStrCell(sb, "F$r", 0, row.description)
+            sb.append("""<c r="G$r" s="$amountStyle"><v>${formatPlainNumeric(row.amount)}</v></c>""")
             sb.append("""</row>""")
         }
 
         sb.append("""</sheetData>""")
-        sb.append("""<autoFilter ref="A1:F$totalRows"/>""")
+        sb.append("""<autoFilter ref="A1:G$totalRows"/>""")
         sb.append("""</worksheet>""")
         return sb.toString()
     }
@@ -335,7 +309,7 @@ object LedgerExcelExporter {
     private const val WORKBOOK_XML =
         """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""" +
             """<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">""" +
-            """<sheets><sheet name="Ledger Journal" sheetId="1" r:id="rId1"/></sheets>""" +
+            """<sheets><sheet name="Ledger Transactions" sheetId="1" r:id="rId1"/></sheets>""" +
             """</workbook>"""
 
     private const val WORKBOOK_RELS_XML =
@@ -367,11 +341,12 @@ object LedgerExcelExporter {
             """<border><left/><right/><top/><bottom style="thin"><color rgb="FFE5E7EB"/></bottom><diagonal/></border>""" +
             """</borders>""" +
             """<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>""" +
-            """<cellXfs count="4">""" +
+            """<cellXfs count="5">""" +
             """<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"><alignment vertical="center"/></xf>""" +
             """<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>""" +
             """<xf numFmtId="164" fontId="2" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>""" +
             """<xf numFmtId="164" fontId="3" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>""" +
+            """<xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>""" +
             """</cellXfs>""" +
             """</styleSheet>"""
 }

@@ -740,7 +740,7 @@ class LedgerViewModel(
     }
 
     fun buildCsvExport(bundle: LedgerDataBundle): String {
-        return LedgerExcelExporter.buildDoubleEntryCsv(bundle)
+        return LedgerExcelExporter.buildCsv(bundle)
     }
 
     fun importExcelTransactions(
@@ -848,6 +848,54 @@ class LedgerViewModel(
                         ).getOrThrow()
                         incomeCatIdByLower[key] = newCatId
                     }
+                }
+
+                // 2b. Ensure any new Expense/Income Ledgers (subcategories) on existing categories are saved
+                var hasAnySubcategory = false
+                val newSubsByExistingCatId = mutableMapOf<String, MutableList<String>>()
+                preview.transactions.forEach { parsed ->
+                    val sub = parsed.subcategory?.trim().orEmpty()
+                    if (sub.isNotEmpty()) {
+                        hasAnySubcategory = true
+                        val existingId = parsed.existingCategoryId
+                        if (existingId != null) {
+                            newSubsByExistingCatId.getOrPut(existingId) { mutableListOf() }.add(sub)
+                        }
+                    }
+                }
+                newSubsByExistingCatId.forEach { (catId, incomingSubs) ->
+                    val existingCat = bundle.categories.firstOrNull { it.id == catId } ?: return@forEach
+                    val merged = existingCat.subcategories.toMutableList()
+                    var changed = false
+                    incomingSubs.forEach { sub ->
+                        if (merged.none { it.equals(sub, ignoreCase = true) }) {
+                            merged.add(sub)
+                            changed = true
+                        }
+                    }
+                    if (changed) {
+                        repository.saveCategory(
+                            userId = currentUserId,
+                            existingId = existingCat.id,
+                            name = existingCat.name,
+                            type = existingCat.categoryType(),
+                            colorHex = existingCat.colorHex,
+                            subcategories = merged,
+                            sortOrder = existingCat.sortOrder
+                        ).getOrThrow()
+                    }
+                }
+                if (hasAnySubcategory && !bundle.settings.subcategoryEnabled) {
+                    val s = bundle.settings
+                    repository.updateSettings(
+                        userId = currentUserId,
+                        mainCurrencyCode = s.mainCurrencyCode,
+                        mainCurrencySymbol = s.mainCurrencySymbol,
+                        subcategoryEnabled = true,
+                        startScreen = s.startScreen,
+                        monthlyStartDate = s.monthlyStartDate,
+                        weeklyStartDay = s.weeklyStartDay
+                    )
                 }
 
                 // 3. Persist all parsed transactions in order

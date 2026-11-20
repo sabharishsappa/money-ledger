@@ -1,6 +1,7 @@
 package com.example.util
 
 import android.util.Xml
+import com.example.data.Category
 import com.example.data.CategoryType
 import com.example.data.TransactionType
 import com.example.viewmodel.LedgerDataBundle
@@ -18,7 +19,8 @@ import kotlin.math.roundToInt
 data class RawImportRow(
     val excelRowNumber: Int,
     val dateRaw: String,
-    val accountRaw: String,
+    val fromAccountRaw: String,
+    val toAccountRaw: String,
     val note: String,
     val tag: String,
     val description: String,
@@ -71,7 +73,7 @@ object LedgerExcelImporter {
         val rawRows = mapGridToRawRows(grid)
 
         if (rawRows.isEmpty()) {
-            error("No transaction rows found. Expected columns: Date, Account, Note, Tag, Description / Remarks, Amount.")
+            error("No transaction rows found. Expected columns: Date of Transaction, From Account, To Account, Note, Tag, Description, Amount.")
         }
 
         buildPreview(fileName = fileName, rawRows = rawRows, bundle = bundle)
@@ -116,10 +118,8 @@ object LedgerExcelImporter {
     }
 
     private fun resolveFirstWorksheetBytes(entries: Map<String, ByteArray>): ByteArray? {
-        // Direct fast path matching our exporter
         entries["xl/worksheets/sheet1.xml"]?.let { return it }
 
-        // Resolve via workbook.xml + workbook.xml.rels if sheet has a custom name/path
         val workbookBytes = entries["xl/workbook.xml"]
         val relsBytes = entries["xl/_rels/workbook.xml.rels"]
         if (workbookBytes != null && relsBytes != null) {
@@ -138,7 +138,6 @@ object LedgerExcelImporter {
             }
         }
 
-        // Fallback: first entry under xl/worksheets/
         return entries.entries
             .sortedBy { it.key }
             .firstOrNull { it.key.startsWith("xl/worksheets/") && it.key.endsWith(".xml") }
@@ -339,7 +338,7 @@ object LedgerExcelImporter {
     }
 
     // -------------------------------------------------------------------------
-    // 2. CSV Fallback Reader (matches LedgerExcelExporter.buildDoubleEntryCsv)
+    // 2. CSV Fallback Reader (matches LedgerExcelExporter.buildCsv)
     // -------------------------------------------------------------------------
 
     private fun readCsvGrid(bytes: ByteArray): List<Pair<Int, Map<Int, String>>> {
@@ -414,30 +413,39 @@ object LedgerExcelImporter {
 
     // -------------------------------------------------------------------------
     // 3. Column Mapping & Header Detection
+    //    Expected: Date of Transaction, From Account, To Account, Note, Tag, Description, Amount
     // -------------------------------------------------------------------------
 
     private fun mapGridToRawRows(grid: List<Pair<Int, Map<Int, String>>>): List<RawImportRow> {
         if (grid.isEmpty()) return emptyList()
 
         var dateCol = 0
-        var accountCol = 1
-        var noteCol = 2
-        var tagCol = 3
-        var descCol = 4
-        var amountCol = 5
+        var fromCol = 1
+        var toCol = 2
+        var noteCol = 3
+        var tagCol = 4
+        var descCol = 5
+        var amountCol = 6
         var startIdx = 0
 
         val firstCells = grid.first().second
         val normalizedHeader = firstCells.mapValues { it.value.trim().lowercase(Locale.US) }
         val looksLikeHeader = normalizedHeader.values.any { v ->
-            v == "date" || v == "account" || v == "amount" || v.contains("description") || v.contains("remarks")
+            v.contains("date") ||
+                v.contains("from") ||
+                v.contains("to account") ||
+                v == "to" ||
+                v == "amount" ||
+                v.contains("description") ||
+                v.contains("remark")
         }
 
         if (looksLikeHeader) {
             normalizedHeader.forEach { (col, name) ->
                 when {
-                    name == "date" || name.startsWith("date") -> dateCol = col
-                    name == "account" || name == "ledger" || name.contains("account") -> accountCol = col
+                    name.contains("date") -> dateCol = col
+                    name.contains("from") || name.contains("credit") || name == "cr" -> fromCol = col
+                    name.startsWith("to ") || name == "to" || name.contains("to account") || name.contains("debit") || name == "dr" -> toCol = col
                     name == "note" || name == "memo" || name == "narration" -> noteCol = col
                     name == "tag" || name == "tagging" || name == "tags" -> tagCol = col
                     name.contains("description") || name.contains("remark") -> descCol = col
@@ -451,18 +459,20 @@ object LedgerExcelImporter {
         for (idx in startIdx until grid.size) {
             val (rowNum, cells) = grid[idx]
             val dateVal = cells[dateCol].orEmpty().trim()
-            val accVal = cells[accountCol].orEmpty().trim()
+            val fromVal = cells[fromCol].orEmpty().trim()
+            val toVal = cells[toCol].orEmpty().trim()
             val noteVal = cells[noteCol].orEmpty().trim()
             val tagVal = cells[tagCol].orEmpty().trim()
             val descVal = cells[descCol].orEmpty().trim()
             val amtVal = cells[amountCol].orEmpty().trim()
 
-            if (dateVal.isEmpty() && accVal.isEmpty() && amtVal.isEmpty()) continue
+            if (dateVal.isEmpty() && fromVal.isEmpty() && toVal.isEmpty() && amtVal.isEmpty()) continue
             out.add(
                 RawImportRow(
                     excelRowNumber = rowNum,
                     dateRaw = dateVal,
-                    accountRaw = accVal,
+                    fromAccountRaw = fromVal,
+                    toAccountRaw = toVal,
                     note = noteVal,
                     tag = tagVal,
                     description = descVal,
@@ -474,17 +484,17 @@ object LedgerExcelImporter {
     }
 
     // -------------------------------------------------------------------------
-    // 4. Double-Entry Pair Reconstruction
+    // 4. Single-Row Accounting Reconstruction
+    //    From Account = Credit, To Account = Debit
+    //    Expense:  From Account = Payment Account (Credit), To Account = Expense Ledger (Debit)
+    //    Income:   From Account = Income Ledger (Credit),   To Account = Receiving Account (Debit)
+    //    Transfer: From Account = Source Account (Credit),  To Account = Destination Account (Debit)
     // -------------------------------------------------------------------------
 
-    private data class ValidatedLine(
-        val rowNum: Int,
-        val epochDay: Long,
-        val accountName: String,
-        val note: String,
-        val tag: String,
-        val description: String,
-        val amount: Double
+    private data class ResolvedCategoryRef(
+        val existingCategoryId: String?,
+        val categoryName: String,
+        val subcategory: String?
     )
 
     private fun buildPreview(
@@ -493,41 +503,39 @@ object LedgerExcelImporter {
         bundle: LedgerDataBundle
     ): LedgerImportPreview {
         val warnings = mutableListOf<String>()
-        val validLines = ArrayList<ValidatedLine>(rawRows.size)
-
-        rawRows.forEach { raw ->
-            val epochDay = parseDateToEpochDay(raw.dateRaw)
-            val amount = parseAmount(raw.amountRaw)
-            when {
-                epochDay == null -> warnings.add("Row ${raw.excelRowNumber}: invalid date \"${raw.dateRaw}\" — skipped.")
-                raw.accountRaw.isBlank() -> warnings.add("Row ${raw.excelRowNumber}: missing Account name — skipped.")
-                amount == null || abs(amount) < 0.0001 -> warnings.add("Row ${raw.excelRowNumber}: invalid or zero amount \"${raw.amountRaw}\" — skipped.")
-                else -> validLines.add(
-                    ValidatedLine(
-                        rowNum = raw.excelRowNumber,
-                        epochDay = epochDay,
-                        accountName = raw.accountRaw.trim(),
-                        note = raw.note.trim(),
-                        tag = raw.tag.trim(),
-                        description = raw.description.trim(),
-                        amount = amount
-                    )
-                )
-            }
-        }
 
         // Lookup tables from existing ledger (preferring active accounts)
         val existingAccounts = mutableMapOf<String, String>()
         bundle.accounts.sortedBy { it.archived }.forEach { acc ->
             existingAccounts.putIfAbsent(acc.name.trim().lowercase(Locale.US), acc.id)
         }
-        val existingExpenseCats = mutableMapOf<String, String>()
-        val existingIncomeCats = mutableMapOf<String, String>()
+
+        val existingExpenseCats = mutableMapOf<String, Category>()
+        val existingIncomeCats = mutableMapOf<String, Category>()
+        val existingExpenseLedgers = mutableMapOf<String, Pair<Category, String>>()
+        val existingIncomeLedgers = mutableMapOf<String, Pair<Category, String>>()
+
         bundle.categories.forEach { cat ->
-            val key = cat.name.trim().lowercase(Locale.US)
+            val catKey = cat.name.trim().lowercase(Locale.US)
             when (cat.categoryType()) {
-                CategoryType.EXPENSE -> existingExpenseCats.putIfAbsent(key, cat.id)
-                CategoryType.INCOME -> existingIncomeCats.putIfAbsent(key, cat.id)
+                CategoryType.EXPENSE -> {
+                    existingExpenseCats.putIfAbsent(catKey, cat)
+                    cat.subcategories.forEach { sub ->
+                        val subClean = sub.trim()
+                        if (subClean.isNotEmpty()) {
+                            existingExpenseLedgers.putIfAbsent(subClean.lowercase(Locale.US), cat to subClean)
+                        }
+                    }
+                }
+                CategoryType.INCOME -> {
+                    existingIncomeCats.putIfAbsent(catKey, cat)
+                    cat.subcategories.forEach { sub ->
+                        val subClean = sub.trim()
+                        if (subClean.isNotEmpty()) {
+                            existingIncomeLedgers.putIfAbsent(subClean.lowercase(Locale.US), cat to subClean)
+                        }
+                    }
+                }
             }
         }
 
@@ -536,78 +544,121 @@ object LedgerExcelImporter {
         val newIncomeCats = LinkedHashMap<String, String>()
         val parsedTransactions = mutableListOf<ParsedImportTransaction>()
 
-        var idx = 0
-        while (idx < validLines.size) {
-            if (idx + 1 >= validLines.size) {
-                warnings.add("Row ${validLines[idx].rowNum}: unpaired line without matching Debit/Credit entry — skipped.")
-                break
+        fun resolveCategory(
+            rawLabel: String,
+            existingCats: Map<String, Category>,
+            existingLedgers: Map<String, Pair<Category, String>>,
+            queuedNewCats: LinkedHashMap<String, String>
+        ): ResolvedCategoryRef {
+            val (base, sub) = splitCategoryLabel(rawLabel)
+            val baseKey = base.lowercase(Locale.US)
+
+            if (sub != null) {
+                val matchedCat = existingCats[baseKey]
+                if (matchedCat != null) {
+                    val canonicalSub = matchedCat.subcategories.firstOrNull {
+                        it.equals(sub, ignoreCase = true)
+                    } ?: sub
+                    return ResolvedCategoryRef(matchedCat.id, matchedCat.name, canonicalSub)
+                }
+                queuedNewCats.putIfAbsent(baseKey, base)
+                return ResolvedCategoryRef(null, queuedNewCats[baseKey] ?: base, sub)
             }
 
-            val first = validLines[idx]
-            val second = validLines[idx + 1]
-
-            val oppositeSigns = (first.amount > 0.0 && second.amount < 0.0) ||
-                (first.amount < 0.0 && second.amount > 0.0)
-            val balanced = abs(first.amount + second.amount) < 0.015
-
-            if (!oppositeSigns || !balanced) {
-                warnings.add(
-                    "Rows ${first.rowNum}–${second.rowNum}: unbalanced pair (${first.amount} and ${second.amount}) — row ${first.rowNum} skipped."
-                )
-                idx += 1
-                continue
+            // Check if rawLabel directly matches an existing Expense/Income Ledger (subcategory)
+            existingLedgers[baseKey]?.let { (parentCat, canonicalSub) ->
+                return ResolvedCategoryRef(parentCat.id, parentCat.name, canonicalSub)
             }
 
-            val debitLine = if (first.amount > 0.0) first else second
-            val creditLine = if (first.amount < 0.0) first else second
-            val txAmount = abs(debitLine.amount)
-            val txEpochDay = debitLine.epochDay
-            val txNote = debitLine.note.ifBlank { creditLine.note }
-            val txTag = debitLine.tag.ifBlank { creditLine.tag }.takeIf { it.isNotBlank() }
-            val txDesc = debitLine.description.ifBlank { creditLine.description }.takeIf { it.isNotBlank() }
+            // Check if rawLabel matches a top-level Category
+            existingCats[baseKey]?.let { cat ->
+                return ResolvedCategoryRef(cat.id, cat.name, null)
+            }
 
-            // Check if this pair is a Transfer Fee exported immediately after its parent Transfer
+            queuedNewCats.putIfAbsent(baseKey, base)
+            return ResolvedCategoryRef(null, queuedNewCats[baseKey] ?: base, null)
+        }
+
+        rawRows.forEach { raw ->
+            val epochDay = parseDateToEpochDay(raw.dateRaw)
+            val parsedAmt = parseAmount(raw.amountRaw)
+            when {
+                epochDay == null -> {
+                    warnings.add("Row ${raw.excelRowNumber}: invalid date \"${raw.dateRaw}\" — skipped.")
+                    return@forEach
+                }
+                raw.fromAccountRaw.isBlank() -> {
+                    warnings.add("Row ${raw.excelRowNumber}: missing From Account — skipped.")
+                    return@forEach
+                }
+                raw.toAccountRaw.isBlank() -> {
+                    warnings.add("Row ${raw.excelRowNumber}: missing To Account — skipped.")
+                    return@forEach
+                }
+                parsedAmt == null || abs(parsedAmt) < 0.0001 -> {
+                    warnings.add("Row ${raw.excelRowNumber}: invalid or zero amount \"${raw.amountRaw}\" — skipped.")
+                    return@forEach
+                }
+                raw.fromAccountRaw.equals(raw.toAccountRaw, ignoreCase = true) -> {
+                    warnings.add("Row ${raw.excelRowNumber}: From Account and To Account are identical — skipped.")
+                    return@forEach
+                }
+            }
+
+            // Standard rule: From Account = Credit, To Account = Debit (negative amount reverses direction)
+            val creditName = if (parsedAmt > 0.0) raw.fromAccountRaw.trim() else raw.toAccountRaw.trim()
+            val debitName = if (parsedAmt > 0.0) raw.toAccountRaw.trim() else raw.fromAccountRaw.trim()
+            val txAmount = abs(parsedAmt)
+            val txNote = raw.note.trim()
+            val txTag = raw.tag.trim().takeIf { it.isNotBlank() }
+            val txDesc = raw.description.trim().takeIf { it.isNotBlank() }
+
+            // Fold Transfer Fee row exported immediately after its parent Transfer
             val lastTx = parsedTransactions.lastOrNull()
             if (lastTx != null &&
                 lastTx.type == TransactionType.TRANSFER &&
                 lastTx.feeAmount == 0.0 &&
-                lastTx.epochDay == txEpochDay &&
-                debitLine.accountName.equals("Transfer Fee", ignoreCase = true) &&
-                creditLine.accountName.equals(lastTx.accountName, ignoreCase = true) &&
+                lastTx.epochDay == epochDay &&
+                debitName.equals("Transfer Fee", ignoreCase = true) &&
+                creditName.equals(lastTx.accountName, ignoreCase = true) &&
                 (txNote == "${lastTx.note} (Fee)" || (lastTx.note.isBlank() && txNote.equals("Transfer Fee", ignoreCase = true)))
             ) {
                 parsedTransactions[parsedTransactions.lastIndex] = lastTx.copy(feeAmount = txAmount)
-                idx += 2
-                continue
+                return@forEach
             }
 
-            val (debitBase, debitSub) = splitCategoryLabel(debitLine.accountName)
-            val (creditBase, creditSub) = splitCategoryLabel(creditLine.accountName)
-            val debitKey = debitLine.accountName.lowercase(Locale.US)
-            val creditKey = creditLine.accountName.lowercase(Locale.US)
+            val (debitBase, debitSub) = splitCategoryLabel(debitName)
+            val (creditBase, creditSub) = splitCategoryLabel(creditName)
+            val debitKey = debitName.lowercase(Locale.US)
+            val creditKey = creditName.lowercase(Locale.US)
             val debitBaseKey = debitBase.lowercase(Locale.US)
             val creditBaseKey = creditBase.lowercase(Locale.US)
 
             val debitAccId = existingAccounts[debitKey]
             val creditAccId = existingAccounts[creditKey]
-            val debitExpCatId = existingExpenseCats[debitBaseKey]
-            val creditIncCatId = existingIncomeCats[creditBaseKey]
 
             val debitIsKnownAccount = debitAccId != null || newAccounts.containsKey(debitKey)
             val creditIsKnownAccount = creditAccId != null || newAccounts.containsKey(creditKey)
-            val debitIsKnownExpCat = debitExpCatId != null || newExpenseCats.containsKey(debitBaseKey) || debitSub != null
-            val creditIsKnownIncCat = creditIncCatId != null || newIncomeCats.containsKey(creditBaseKey) || creditSub != null
+
+            val debitIsKnownExp = existingExpenseCats.containsKey(debitBaseKey) ||
+                existingExpenseLedgers.containsKey(debitKey) ||
+                newExpenseCats.containsKey(debitBaseKey) ||
+                debitSub != null
+            val creditIsKnownInc = existingIncomeCats.containsKey(creditBaseKey) ||
+                existingIncomeLedgers.containsKey(creditKey) ||
+                newIncomeCats.containsKey(creditBaseKey) ||
+                creditSub != null
 
             val parsed = when {
-                // Transfer: Debit = To Account (+), Credit = From Account (-)
+                // Transfer: From Account (Credit) -> To Account (Debit), both are Accounts
                 debitIsKnownAccount && creditIsKnownAccount -> {
                     ParsedImportTransaction(
                         type = TransactionType.TRANSFER,
-                        epochDay = txEpochDay,
+                        epochDay = epochDay,
                         amount = txAmount,
-                        accountName = creditLine.accountName,
+                        accountName = creditName,
                         existingAccountId = creditAccId,
-                        toAccountName = debitLine.accountName,
+                        toAccountName = debitName,
                         existingToAccountId = debitAccId,
                         note = txNote,
                         tagging = txTag,
@@ -615,82 +666,74 @@ object LedgerExcelImporter {
                     )
                 }
 
-                // Expense: Debit = Expense Category (+), Credit = Account (-)
+                // Expense: From Account = Payment Account (Credit), To Account = Expense Ledger (Debit)
                 creditIsKnownAccount && !debitIsKnownAccount -> {
-                    if (debitExpCatId == null) {
-                        newExpenseCats.putIfAbsent(debitBaseKey, debitBase)
-                    }
+                    val expRef = resolveCategory(debitName, existingExpenseCats, existingExpenseLedgers, newExpenseCats)
                     ParsedImportTransaction(
                         type = TransactionType.EXPENSE,
-                        epochDay = txEpochDay,
+                        epochDay = epochDay,
                         amount = txAmount,
-                        accountName = creditLine.accountName,
+                        accountName = creditName,
                         existingAccountId = creditAccId,
-                        categoryName = debitBase,
-                        existingCategoryId = debitExpCatId,
-                        subcategory = debitSub,
+                        categoryName = expRef.categoryName,
+                        existingCategoryId = expRef.existingCategoryId,
+                        subcategory = expRef.subcategory,
                         note = txNote,
                         tagging = txTag,
                         description = txDesc
                     )
                 }
 
-                // Income: Debit = Account (+), Credit = Income Category (-)
+                // Income: From Account = Income Ledger (Credit), To Account = Receiving Account (Debit)
                 debitIsKnownAccount && !creditIsKnownAccount -> {
-                    if (creditIncCatId == null) {
-                        newIncomeCats.putIfAbsent(creditBaseKey, creditBase)
-                    }
+                    val incRef = resolveCategory(creditName, existingIncomeCats, existingIncomeLedgers, newIncomeCats)
                     ParsedImportTransaction(
                         type = TransactionType.INCOME,
-                        epochDay = txEpochDay,
+                        epochDay = epochDay,
                         amount = txAmount,
-                        accountName = debitLine.accountName,
+                        accountName = debitName,
                         existingAccountId = debitAccId,
-                        categoryName = creditBase,
-                        existingCategoryId = creditIncCatId,
-                        subcategory = creditSub,
+                        categoryName = incRef.categoryName,
+                        existingCategoryId = incRef.existingCategoryId,
+                        subcategory = incRef.subcategory,
                         note = txNote,
                         tagging = txTag,
                         description = txDesc
                     )
                 }
 
-                // Neither is a known account yet, but credit matches an Income Category -> Income
-                creditIsKnownIncCat && !debitIsKnownExpCat -> {
-                    newAccounts.putIfAbsent(debitKey, debitLine.accountName)
-                    if (creditIncCatId == null) {
-                        newIncomeCats.putIfAbsent(creditBaseKey, creditBase)
-                    }
+                // Neither is a known account yet, but From Account (Credit) matches an Income Category/Ledger -> Income
+                creditIsKnownInc && !debitIsKnownExp -> {
+                    newAccounts.putIfAbsent(debitKey, debitName)
+                    val incRef = resolveCategory(creditName, existingIncomeCats, existingIncomeLedgers, newIncomeCats)
                     ParsedImportTransaction(
                         type = TransactionType.INCOME,
-                        epochDay = txEpochDay,
+                        epochDay = epochDay,
                         amount = txAmount,
-                        accountName = debitLine.accountName,
+                        accountName = debitName,
                         existingAccountId = null,
-                        categoryName = creditBase,
-                        existingCategoryId = creditIncCatId,
-                        subcategory = creditSub,
+                        categoryName = incRef.categoryName,
+                        existingCategoryId = incRef.existingCategoryId,
+                        subcategory = incRef.subcategory,
                         note = txNote,
                         tagging = txTag,
                         description = txDesc
                     )
                 }
 
-                // Default (including known Expense Category with a brand-new Account name) -> Expense
+                // Default (including known Expense Category/Ledger with a new payment account) -> Expense
                 else -> {
-                    newAccounts.putIfAbsent(creditKey, creditLine.accountName)
-                    if (debitExpCatId == null) {
-                        newExpenseCats.putIfAbsent(debitBaseKey, debitBase)
-                    }
+                    newAccounts.putIfAbsent(creditKey, creditName)
+                    val expRef = resolveCategory(debitName, existingExpenseCats, existingExpenseLedgers, newExpenseCats)
                     ParsedImportTransaction(
                         type = TransactionType.EXPENSE,
-                        epochDay = txEpochDay,
+                        epochDay = epochDay,
                         amount = txAmount,
-                        accountName = creditLine.accountName,
+                        accountName = creditName,
                         existingAccountId = null,
-                        categoryName = debitBase,
-                        existingCategoryId = debitExpCatId,
-                        subcategory = debitSub,
+                        categoryName = expRef.categoryName,
+                        existingCategoryId = expRef.existingCategoryId,
+                        subcategory = expRef.subcategory,
                         note = txNote,
                         tagging = txTag,
                         description = txDesc
@@ -699,12 +742,12 @@ object LedgerExcelImporter {
             }
 
             parsedTransactions.add(parsed)
-            idx += 2
         }
 
         if (parsedTransactions.isEmpty()) {
-            val detail = warnings.firstOrNull() ?: "Ensure each entry has 2 rows: one Debit (+amount) and one Credit (-amount)."
-            error("No valid double-entry transactions found. $detail")
+            val detail = warnings.firstOrNull()
+                ?: "Expected columns: Date of Transaction, From Account, To Account, Note, Tag, Description, Amount."
+            error("No valid transactions found. $detail")
         }
 
         return LedgerImportPreview(

@@ -329,7 +329,7 @@ private fun LocalLedgerShell(
         val csv = viewModel.buildCsvExport(bundle)
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/csv"
-            putExtra(Intent.EXTRA_SUBJECT, "Money Ledger Double-Entry Export")
+            putExtra(Intent.EXTRA_SUBJECT, "Money Ledger Export")
             putExtra(Intent.EXTRA_TEXT, csv)
         }
         context.startActivity(Intent.createChooser(intent, "Share Ledger CSV"))
@@ -562,7 +562,7 @@ private fun LocalLedgerShell(
 
             exportDialogBundle?.let { targetBundle ->
                 val rowCount = remember(targetBundle.transactions) {
-                    LedgerExcelExporter.buildDoubleEntryRows(targetBundle).size
+                    LedgerExcelExporter.buildExportRows(targetBundle).size
                 }
                 AlertDialog(
                     onDismissRequest = { exportDialogBundle = null },
@@ -577,7 +577,7 @@ private fun LocalLedgerShell(
                     text = {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text(
-                                text = "${targetBundle.transactions.size} entries will be exported as $rowCount double-entry lines (Debit + / Credit -).",
+                                text = "${targetBundle.transactions.size} entries ($rowCount rows) will be exported (From Account = Credit, To Account = Debit).",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = LedgerTextSecondary
                             )
@@ -592,22 +592,22 @@ private fun LocalLedgerShell(
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
                                     Text(
-                                        text = "Columns: Date • Account • Note • Tag • Description / Remarks • Amount",
+                                        text = "Columns: Date of Transaction • From Account • To Account • Note • Tag • Description • Amount",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = LedgerTextPrimary
                                     )
                                     Text(
-                                        text = "• Expense: Category Debit (+), Account Credit (-)",
+                                        text = "• Expense: From Account (Credit) → To Account = Expense Ledger (Debit)",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = LedgerTextMuted
                                     )
                                     Text(
-                                        text = "• Income: Account Debit (+), Category Credit (-)",
+                                        text = "• Income: From Account = Income Ledger (Credit) → To Account (Debit)",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = LedgerTextMuted
                                     )
                                     Text(
-                                        text = "• Transfer: To Account Debit (+), From Account Credit (-)",
+                                        text = "• Transfer: From Account (Credit) → To Account (Debit)",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = LedgerTextMuted
                                     )
@@ -686,7 +686,7 @@ private fun LocalLedgerShell(
                     text = {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text(
-                                text = "Select an Excel (.xlsx) or CSV file using the same double-entry format as Export (2 lines per entry: Debit + / Credit -).",
+                                text = "Select an Excel (.xlsx) or CSV file in the export format (1 row per transaction: From Account = Credit, To Account = Debit).",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = LedgerTextSecondary
                             )
@@ -701,22 +701,22 @@ private fun LocalLedgerShell(
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
                                     Text(
-                                        text = "Columns: Date • Account • Note • Tag • Description / Remarks • Amount",
+                                        text = "Columns: Date of Transaction • From Account • To Account • Note • Tag • Description • Amount",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = LedgerTextPrimary
                                     )
                                     Text(
-                                        text = "• Expense: Category (+), Account (-)",
+                                        text = "• Expense: From Account (Credit) → To Account = Expense Ledger (Debit)",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = LedgerTextMuted
                                     )
                                     Text(
-                                        text = "• Income: Account (+), Category (-)",
+                                        text = "• Income: From Account = Income Ledger (Credit) → To Account (Debit)",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = LedgerTextMuted
                                     )
                                     Text(
-                                        text = "• Transfer: To Account (+), From Account (-)",
+                                        text = "• Transfer: From Account (Credit) → To Account (Debit)",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = LedgerTextMuted
                                     )
