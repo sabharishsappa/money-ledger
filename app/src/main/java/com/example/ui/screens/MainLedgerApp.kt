@@ -3,9 +3,25 @@ package com.example.ui.screens
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -62,23 +78,31 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -103,6 +127,7 @@ import com.example.ui.theme.LedgerSurfaceElevated
 import com.example.ui.theme.LedgerTextMuted
 import com.example.ui.theme.LedgerTextPrimary
 import com.example.ui.theme.LedgerTextSecondary
+import com.example.util.AppLockManager
 import com.example.util.LedgerExcelExporter
 import com.example.util.LedgerExcelImporter
 import com.example.util.LedgerImportPreview
@@ -120,12 +145,15 @@ private sealed interface ActiveOverlay {
     data object None : ActiveOverlay
     data class AddEditTx(
         val existing: LedgerTransaction?,
+        val draftTransaction: LedgerTransaction? = null,
+        val draftNonce: Long = 0L,
         val prefillType: TransactionType? = null,
         val prefillCategoryId: String? = null,
         val prefillSubcategory: String? = null
     ) : ActiveOverlay
     data class AccountDetail(val accountId: String) : ActiveOverlay
     data class Configuration(val route: ConfigRoute) : ActiveOverlay
+    data object SpendingTrends : ActiveOverlay
 }
 
 private const val LOCAL_TESTING_USER_ID = "local_device_user"
@@ -158,7 +186,37 @@ private fun LocalLedgerShell(
     val filterState by viewModel.filterState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
+
+    var appLockEnabled by remember { mutableStateOf(AppLockManager.isAppLockEnabled(context)) }
+    var isAppLocked by remember { mutableStateOf(appLockEnabled) }
+    var lastBackgroundElapsed by remember { mutableLongStateOf(0L) }
+
+    DisposableEffect(lifecycleOwner, appLockEnabled) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_STOP -> {
+                    if (appLockEnabled) {
+                        lastBackgroundElapsed = SystemClock.elapsedRealtime()
+                    }
+                }
+                Lifecycle.Event.ON_START -> {
+                    if (appLockEnabled && lastBackgroundElapsed > 0L) {
+                        val elapsedMs = SystemClock.elapsedRealtime() - lastBackgroundElapsed
+                        val requiredDelayMs = AppLockManager.autoLockDelaySeconds(context) * 1000L
+                        if (elapsedMs >= requiredDelayMs) {
+                            isAppLocked = true
+                        }
+                    }
+                    lastBackgroundElapsed = 0L
+                }
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     var activeTab by remember { mutableStateOf(MainTab.TRANSACTIONS) }
     var overlay by remember { mutableStateOf<ActiveOverlay>(ActiveOverlay.None) }
@@ -335,6 +393,16 @@ private fun LocalLedgerShell(
         context.startActivity(Intent.createChooser(intent, "Share Ledger CSV"))
     }
 
+    if (appLockEnabled && isAppLocked) {
+        PinLockGateScreen(
+            onUnlocked = {
+                isAppLocked = false
+                lastBackgroundElapsed = 0L
+            }
+        )
+        return
+    }
+
     when (val state = uiState) {
         is UiState.Loading -> {
             Box(
@@ -379,11 +447,43 @@ private fun LocalLedgerShell(
         is UiState.Success -> {
             val bundle = state.data
 
-            when (val currentOverlay = overlay) {
-                is ActiveOverlay.AddEditTx -> {
+            AnimatedContent(
+                targetState = overlay,
+                transitionSpec = {
+                    val enteringOverlay = initialState == ActiveOverlay.None && targetState != ActiveOverlay.None
+                    val exitingOverlay = initialState != ActiveOverlay.None && targetState == ActiveOverlay.None
+                    when {
+                        enteringOverlay -> {
+                            (slideInVertically(
+                                animationSpec = tween(220, easing = FastOutSlowInEasing),
+                                initialOffsetY = { it / 14 }
+                            ) + fadeIn(animationSpec = tween(200)))
+                                .togetherWith(fadeOut(animationSpec = tween(140)))
+                        }
+                        exitingOverlay -> {
+                            fadeIn(animationSpec = tween(180))
+                                .togetherWith(
+                                    slideOutVertically(
+                                        animationSpec = tween(180, easing = FastOutSlowInEasing),
+                                        targetOffsetY = { it / 14 }
+                                    ) + fadeOut(animationSpec = tween(150))
+                                )
+                        }
+                        else -> {
+                            fadeIn(animationSpec = tween(180))
+                                .togetherWith(fadeOut(animationSpec = tween(140)))
+                        }
+                    }
+                },
+                label = "overlay_transition"
+            ) { currentOverlay ->
+                when (currentOverlay) {
+                    is ActiveOverlay.AddEditTx -> {
                     AddEditTransactionScreen(
                         bundle = bundle,
                         existing = currentOverlay.existing,
+                        draft = currentOverlay.draftTransaction,
+                        draftKey = currentOverlay.draftNonce,
                         prefillType = currentOverlay.prefillType,
                         prefillCategoryId = currentOverlay.prefillCategoryId,
                         prefillSubcategory = currentOverlay.prefillSubcategory,
@@ -395,20 +495,22 @@ private fun LocalLedgerShell(
                                 }
                             }
                         },
-                        onCopy = if (currentOverlay.existing != null) {
-                            { copiedTx ->
-                                viewModel.copyTransaction(copiedTx) { ok ->
-                                    if (ok) overlay = ActiveOverlay.None
-                                }
-                            }
-                        } else null,
-                        onDelete = if (currentOverlay.existing != null) {
-                            { id ->
+                        onCopy = { copiedTx ->
+                            overlay = ActiveOverlay.AddEditTx(
+                                existing = null,
+                                draftTransaction = copiedTx,
+                                draftNonce = System.nanoTime()
+                            )
+                        },
+                        onDelete = { id ->
+                            if (id.isNotBlank()) {
                                 viewModel.deleteTransaction(id) { ok ->
                                     if (ok) overlay = ActiveOverlay.None
                                 }
+                            } else {
+                                overlay = ActiveOverlay.None
                             }
-                        } else null,
+                        },
                         onManageAccounts = {
                             overlay = ActiveOverlay.Configuration(ConfigRoute.ACCOUNTS_SETTING)
                         },
@@ -441,6 +543,21 @@ private fun LocalLedgerShell(
                         initialRoute = currentOverlay.route,
                         bundle = bundle,
                         viewModel = viewModel,
+                        appLockEnabled = appLockEnabled,
+                        onAppLockStateChanged = { enabled, message ->
+                            appLockEnabled = enabled
+                            if (!enabled) {
+                                isAppLocked = false
+                                lastBackgroundElapsed = 0L
+                            }
+                            scope.launch { snackbarHostState.showSnackbar(message) }
+                        },
+                        onLockNow = {
+                            overlay = ActiveOverlay.None
+                            if (appLockEnabled) {
+                                isAppLocked = true
+                            }
+                        },
                         onBackToMain = { overlay = ActiveOverlay.None },
                         onEditTransaction = { tx ->
                             overlay = ActiveOverlay.AddEditTx(tx)
@@ -461,6 +578,21 @@ private fun LocalLedgerShell(
                                 },
                                 prefillCategoryId = catId,
                                 prefillSubcategory = ledgerName
+                            )
+                        }
+                    )
+                }
+
+                ActiveOverlay.SpendingTrends -> {
+                    SpendingTrendsScreen(
+                        bundle = bundle,
+                        viewModel = viewModel,
+                        onBack = { overlay = ActiveOverlay.None },
+                        onEditTransaction = { tx -> overlay = ActiveOverlay.AddEditTx(tx) },
+                        onAddExpense = {
+                            overlay = ActiveOverlay.AddEditTx(
+                                existing = null,
+                                prefillType = TransactionType.EXPENSE
                             )
                         }
                     )
@@ -515,10 +647,18 @@ private fun LocalLedgerShell(
                                         bundle = bundle,
                                         filterState = filterState,
                                         viewModel = viewModel,
+                                        appLockEnabled = appLockEnabled,
                                         onAddTransaction = { overlay = ActiveOverlay.AddEditTx(null) },
+                                        onAddExpense = {
+                                            overlay = ActiveOverlay.AddEditTx(
+                                                existing = null,
+                                                prefillType = TransactionType.EXPENSE
+                                            )
+                                        },
                                         onEditTransaction = { tx -> overlay = ActiveOverlay.AddEditTx(tx) },
                                         onSelectAccount = { acc -> overlay = ActiveOverlay.AccountDetail(acc.id) },
                                         onOpenConfig = { route -> overlay = ActiveOverlay.Configuration(route) },
+                                        onOpenSpendingTrends = { overlay = ActiveOverlay.SpendingTrends },
                                         onExportCsv = { exportDialogBundle = bundle },
                                         onImportExcel = { importDialogBundle = bundle },
                                         onMassUploadLedgers = { ledgerUploadDialogBundle = bundle },
@@ -544,10 +684,18 @@ private fun LocalLedgerShell(
                                     bundle = bundle,
                                     filterState = filterState,
                                     viewModel = viewModel,
+                                    appLockEnabled = appLockEnabled,
                                     onAddTransaction = { overlay = ActiveOverlay.AddEditTx(null) },
+                                    onAddExpense = {
+                                        overlay = ActiveOverlay.AddEditTx(
+                                            existing = null,
+                                            prefillType = TransactionType.EXPENSE
+                                        )
+                                    },
                                     onEditTransaction = { tx -> overlay = ActiveOverlay.AddEditTx(tx) },
                                     onSelectAccount = { acc -> overlay = ActiveOverlay.AccountDetail(acc.id) },
                                     onOpenConfig = { route -> overlay = ActiveOverlay.Configuration(route) },
+                                    onOpenSpendingTrends = { overlay = ActiveOverlay.SpendingTrends },
                                     onExportCsv = { exportDialogBundle = bundle },
                                     onImportExcel = { importDialogBundle = bundle },
                                     onMassUploadLedgers = { ledgerUploadDialogBundle = bundle },
@@ -558,6 +706,7 @@ private fun LocalLedgerShell(
                         }
                     }
                 }
+            }
             }
 
             exportDialogBundle?.let { targetBundle ->
@@ -1313,64 +1462,83 @@ private fun MainTabContent(
     bundle: LedgerDataBundle,
     filterState: com.example.viewmodel.FilterState,
     viewModel: LedgerViewModel,
+    appLockEnabled: Boolean,
     onAddTransaction: () -> Unit,
+    onAddExpense: () -> Unit,
     onEditTransaction: (LedgerTransaction) -> Unit,
     onSelectAccount: (com.example.data.Account) -> Unit,
     onOpenConfig: (ConfigRoute) -> Unit,
+    onOpenSpendingTrends: () -> Unit,
     onExportCsv: () -> Unit,
     onImportExcel: () -> Unit,
     onMassUploadLedgers: () -> Unit,
     onCreateCategoryLedger: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    when (activeTab) {
-        MainTab.TRANSACTIONS -> TransactionsScreen(
-            bundle = bundle,
-            filter = filterState,
-            viewModel = viewModel,
-            onAddTransaction = onAddTransaction,
-            onEditTransaction = onEditTransaction,
-            onExportCsv = onExportCsv,
-            onImportExcel = onImportExcel,
-            onOpenBudgets = { onOpenConfig(ConfigRoute.BUDGET_SETTING) },
-            modifier = modifier
-        )
+    AnimatedContent(
+        targetState = activeTab,
+        transitionSpec = {
+            val direction = if (targetState.ordinal >= initialState.ordinal) 1 else -1
+            (slideInHorizontally(
+                animationSpec = tween(190, easing = FastOutSlowInEasing),
+                initialOffsetX = { direction * (it / 16) }
+            ) + fadeIn(animationSpec = tween(170)))
+                .togetherWith(
+                    slideOutHorizontally(
+                        animationSpec = tween(150, easing = FastOutSlowInEasing),
+                        targetOffsetX = { -direction * (it / 20) }
+                    ) + fadeOut(animationSpec = tween(130))
+                )
+        },
+        modifier = modifier,
+        label = "main_tab_transition"
+    ) { tab ->
+        when (tab) {
+            MainTab.TRANSACTIONS -> TransactionsScreen(
+                bundle = bundle,
+                filter = filterState,
+                viewModel = viewModel,
+                onAddTransaction = onAddTransaction,
+                onEditTransaction = onEditTransaction,
+                onExportCsv = onExportCsv,
+                onImportExcel = onImportExcel,
+                onOpenBudgets = { onOpenConfig(ConfigRoute.BUDGET_SETTING) },
+                modifier = Modifier.fillMaxSize()
+            )
 
-        MainTab.STATS -> StatsScreen(
-            bundle = bundle,
-            filter = filterState,
-            viewModel = viewModel,
-            onEditTransaction = onEditTransaction,
-            modifier = modifier
-        )
+            MainTab.ACCOUNTS -> AccountsScreen(
+                bundle = bundle,
+                viewModel = viewModel,
+                onSelectAccount = onSelectAccount,
+                onOpenAccountsSetting = { onOpenConfig(ConfigRoute.ACCOUNTS_SETTING) },
+                onOpenAccountGroups = { onOpenConfig(ConfigRoute.ACCOUNT_GROUPS) },
+                onMassUploadLedgers = onMassUploadLedgers,
+                onCreateCategoryLedger = onCreateCategoryLedger,
+                modifier = Modifier.fillMaxSize()
+            )
 
-        MainTab.REPORTS -> ReportsScreen(
-            bundle = bundle,
-            viewModel = viewModel,
-            onSelectAccount = onSelectAccount,
-            modifier = modifier
-        )
+            MainTab.REPORTS -> ReportsScreen(
+                bundle = bundle,
+                filter = filterState,
+                viewModel = viewModel,
+                onSelectAccount = onSelectAccount,
+                onEditTransaction = onEditTransaction,
+                onAddExpense = onAddExpense,
+                modifier = Modifier.fillMaxSize()
+            )
 
-        MainTab.ACCOUNTS -> AccountsScreen(
-            bundle = bundle,
-            viewModel = viewModel,
-            onSelectAccount = onSelectAccount,
-            onOpenAccountsSetting = { onOpenConfig(ConfigRoute.ACCOUNTS_SETTING) },
-            onOpenAccountGroups = { onOpenConfig(ConfigRoute.ACCOUNT_GROUPS) },
-            onMassUploadLedgers = onMassUploadLedgers,
-            onCreateCategoryLedger = onCreateCategoryLedger,
-            modifier = modifier
-        )
-
-        MainTab.MORE -> MoreScreen(
-            bundle = bundle,
-            onOpenConfiguration = { onOpenConfig(ConfigRoute.ROOT) },
-            onExportCsv = onExportCsv,
-            onImportExcel = onImportExcel,
-            onMassUploadLedgers = onMassUploadLedgers,
-            onOpenBudgets = { onOpenConfig(ConfigRoute.BUDGET_SETTING) },
-            modifier = modifier
-        )
+            MainTab.MORE -> MoreScreen(
+                bundle = bundle,
+                appLockEnabled = appLockEnabled,
+                onOpenConfiguration = { onOpenConfig(ConfigRoute.ROOT) },
+                onOpenAppLock = { onOpenConfig(ConfigRoute.APP_LOCK) },
+                onExportCsv = onExportCsv,
+                onImportExcel = onImportExcel,
+                onMassUploadLedgers = onMassUploadLedgers,
+                onOpenBudgets = { onOpenConfig(ConfigRoute.BUDGET_SETTING) },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
     }
 }
 
@@ -1389,12 +1557,33 @@ private fun LedgerBottomBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(60.dp),
+                .height(58.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             MainTab.entries.forEach { tab ->
                 val selected = activeTab == tab
-                val tint = if (selected) LedgerCoral else LedgerTextMuted
+                val tint by animateColorAsState(
+                    targetValue = if (selected) LedgerCoral else LedgerTextMuted,
+                    animationSpec = tween(180),
+                    label = "bottom_bar_tint_${tab.name}"
+                )
+                val pillWidth by animateDpAsState(
+                    targetValue = if (selected) 46.dp else 0.dp,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessMedium
+                    ),
+                    label = "bottom_bar_pill_${tab.name}"
+                )
+                val iconScale by animateFloatAsState(
+                    targetValue = if (selected) 1.08f else 1.0f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                        stiffness = Spring.StiffnessMedium
+                    ),
+                    label = "bottom_bar_scale_${tab.name}"
+                )
+
                 Column(
                     modifier = Modifier
                         .weight(1f)
@@ -1404,19 +1593,40 @@ private fun LedgerBottomBar(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    Icon(
-                        imageVector = tabIcon(tab, selected),
-                        contentDescription = tab.label,
-                        tint = tint,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Spacer(modifier = Modifier.height(3.dp))
+                    Box(
+                        modifier = Modifier.height(26.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (pillWidth > 1.dp) {
+                            Box(
+                                modifier = Modifier
+                                    .width(pillWidth)
+                                    .height(26.dp)
+                                    .clip(RoundedCornerShape(13.dp))
+                                    .background(LedgerCoral.copy(alpha = 0.14f))
+                            )
+                        }
+                        Icon(
+                            imageVector = tabIcon(tab, selected),
+                            contentDescription = tab.label,
+                            tint = tint,
+                            modifier = Modifier
+                                .size(21.dp)
+                                .graphicsLayer {
+                                    scaleX = iconScale
+                                    scaleY = iconScale
+                                }
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = tab.label,
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
                         color = tint,
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        maxLines = 1
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -1426,8 +1636,7 @@ private fun LedgerBottomBar(
 
 private fun tabIcon(tab: MainTab, selected: Boolean) = when (tab) {
     MainTab.TRANSACTIONS -> if (selected) Icons.Filled.Book else Icons.Outlined.Book
-    MainTab.STATS -> if (selected) Icons.Filled.BarChart else Icons.Outlined.BarChart
-    MainTab.REPORTS -> if (selected) Icons.Filled.Assessment else Icons.Outlined.Assessment
     MainTab.ACCOUNTS -> if (selected) Icons.Filled.AccountBalanceWallet else Icons.Outlined.AccountBalanceWallet
+    MainTab.REPORTS -> if (selected) Icons.Filled.Assessment else Icons.Outlined.Assessment
     MainTab.MORE -> if (selected) Icons.Filled.MoreHoriz else Icons.Outlined.MoreHoriz
 }

@@ -1,15 +1,21 @@
 package com.example.ui.screens
 
 import android.graphics.Paint
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -17,9 +23,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,6 +35,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -92,6 +101,7 @@ fun StatsScreen(
     filter: FilterState,
     viewModel: LedgerViewModel,
     onEditTransaction: (LedgerTransaction) -> Unit,
+    onOpenSpendingTrends: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val symbol = bundle.settings.mainCurrencySymbol
@@ -131,7 +141,12 @@ fun StatsScreen(
                 style = MaterialTheme.typography.titleMedium,
                 color = LedgerTextPrimary,
                 fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(horizontal = 4.dp)
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .padding(horizontal = 4.dp)
             )
             IconButton(
                 onClick = { viewModel.nextStatsPeriod() },
@@ -145,6 +160,38 @@ fun StatsScreen(
             }
 
             Spacer(modifier = Modifier.weight(1f))
+
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = LedgerCoral.copy(alpha = 0.16f),
+                border = BorderStroke(1.dp, LedgerCoral.copy(alpha = 0.55f)),
+                modifier = Modifier
+                    .padding(end = 6.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable(onClick = onOpenSpendingTrends)
+                    .testTag("stats_spending_trends_button")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.BarChart,
+                        contentDescription = "6-Month Spending Trends",
+                        tint = LedgerCoral,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "6M Trends",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = LedgerCoral,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+            }
 
             Box {
                 Surface(
@@ -220,92 +267,144 @@ fun StatsScreen(
         }
         HorizontalDivider(color = LedgerDivider, thickness = 1.dp)
 
-        if (slices.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize().padding(32.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        imageVector = Icons.Filled.PieChart,
-                        contentDescription = null,
-                        tint = LedgerTextMuted,
-                        modifier = Modifier.size(56.dp)
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = if (filter.statsIsExpenseTab) "No expenses recorded in this period" else "No income recorded in this period",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = LedgerTextPrimary,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "Add transactions or switch period to visualize your category breakdown.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = LedgerTextSecondary,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 24.dp)
-            ) {
-                item(key = "pie_chart") {
-                    AnimatedLedgerPieChart(
-                        slices = slices,
-                        animationKey = "${filter.selectedYear}_${filter.selectedMonth}_${filter.statsPeriodType}_${filter.statsIsExpenseTab}_${slices.size}",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(270.dp)
-                            .background(LedgerBackground)
-                    )
-                    HorizontalDivider(color = LedgerDivider, thickness = 1.dp)
-                }
-
-                items(slices, key = { it.categoryId }) { slice ->
-                    val sliceColor = LedgerFormatters.parseColorHex(slice.colorHex)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(LedgerSurface)
-                            .clickable { inspectedSlice = slice }
-                            .padding(horizontal = 14.dp, vertical = 13.dp)
-                            .testTag("stats_category_row_${slice.categoryId}"),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .width(44.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(sliceColor)
-                                .padding(vertical = 4.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "${slice.percentage.roundToInt()}%",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = Color.Black.copy(alpha = 0.85f)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            text = slice.categoryName,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = LedgerTextPrimary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
+        AnimatedContent(
+            targetState = slices.isEmpty() to filter.statsIsExpenseTab,
+            transitionSpec = {
+                fadeIn(tween(180)).togetherWith(fadeOut(tween(130)))
+            },
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            label = "stats_body_transition"
+        ) { (isEmpty, isExpense) ->
+            if (isEmpty) {
+                Box(
+                    modifier = Modifier.fillMaxSize().padding(28.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Filled.PieChart,
+                            contentDescription = null,
+                            tint = LedgerTextMuted,
+                            modifier = Modifier.size(52.dp)
                         )
+                        Spacer(modifier = Modifier.height(10.dp))
                         Text(
-                            text = LedgerFormatters.formatAmount(slice.amount, symbol),
-                            style = TabularAmountStyle.copy(fontSize = 14.sp),
-                            color = LedgerTextPrimary
+                            text = if (isExpense) "No expenses recorded in this period" else "No income recorded in this period",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = LedgerTextPrimary,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Add transactions or switch period to visualize your category breakdown.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = LedgerTextSecondary,
+                            textAlign = TextAlign.Center
                         )
                     }
-                    HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                }
+            } else {
+                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                    val chartHeight = (maxWidth * 0.60f).coerceIn(210.dp, 280.dp)
+                    val contentMaxWidth = 720.dp
+
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        contentPadding = PaddingValues(bottom = 24.dp)
+                    ) {
+                        item(key = "pie_chart", contentType = "pie_chart") {
+                            AnimatedLedgerPieChart(
+                                slices = slices,
+                                animationKey = "${filter.selectedYear}_${filter.selectedMonth}_${filter.statsPeriodType}_${filter.statsIsExpenseTab}_${slices.size}",
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .widthIn(max = contentMaxWidth)
+                                    .height(chartHeight)
+                                    .background(LedgerBackground)
+                            )
+                            HorizontalDivider(color = LedgerDivider, thickness = 1.dp)
+                        }
+
+                        items(
+                            items = slices,
+                            key = { it.categoryId },
+                            contentType = { "stat_slice_row" }
+                        ) { slice ->
+                            val sliceColor = remember(slice.colorHex) {
+                                LedgerFormatters.parseColorHex(slice.colorHex)
+                            }
+                            val shareFrac = (slice.percentage / 100.0).toFloat().coerceIn(0f, 1f)
+                            Column(
+                                modifier = Modifier
+                                    .animateItem()
+                                    .fillMaxWidth()
+                                    .widthIn(max = contentMaxWidth)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 50.dp)
+                                        .background(LedgerSurface)
+                                        .clickable { inspectedSlice = slice }
+                                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                                        .testTag("stats_category_row_${slice.categoryId}"),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .width(42.dp)
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(sliceColor)
+                                            .padding(vertical = 3.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "${slice.percentage.roundToInt()}%",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = Color.Black.copy(alpha = 0.85f),
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
+                                        Text(
+                                            text = slice.categoryName,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                                            color = LedgerTextPrimary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(3.dp)
+                                                .clip(RoundedCornerShape(2.dp))
+                                                .background(LedgerSurfaceElevated)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth(shareFrac)
+                                                    .height(3.dp)
+                                                    .clip(RoundedCornerShape(2.dp))
+                                                    .background(sliceColor.copy(alpha = 0.85f))
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = LedgerFormatters.formatAmount(slice.amount, symbol),
+                                        style = TabularAmountStyle.copy(fontSize = 13.5.sp),
+                                        color = LedgerTextPrimary,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
+                                HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -378,27 +477,46 @@ private fun StatsTypeTab(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val textColor by animateColorAsState(
+        targetValue = if (selected) LedgerTextPrimary else LedgerTextSecondary,
+        animationSpec = tween(160),
+        label = "stats_tab_text"
+    )
+    val indicatorColor by animateColorAsState(
+        targetValue = if (selected) LedgerCoral else Color.Transparent,
+        animationSpec = tween(180),
+        label = "stats_tab_indicator"
+    )
     Column(
         modifier = modifier.clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.titleSmall,
-            color = if (selected) LedgerTextPrimary else LedgerTextSecondary,
+            style = MaterialTheme.typography.titleSmall.copy(fontSize = 13.sp),
+            color = textColor,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
             maxLines = 1,
+            softWrap = false,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 11.dp)
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 10.dp)
         )
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(2.dp)
-                .background(if (selected) LedgerCoral else Color.Transparent)
+                .background(indicatorColor)
         )
     }
 }
+
+private data class PreparedPieSlice(
+    val slice: CategoryStatSlice,
+    val color: Color,
+    val rawSweep: Float,
+    val shortName: String,
+    val pctText: String
+)
 
 @Composable
 private fun AnimatedLedgerPieChart(
@@ -411,46 +529,68 @@ private fun AnimatedLedgerPieChart(
         sweepProgress.snapTo(0f)
         sweepProgress.animateTo(
             targetValue = 1f,
-            animationSpec = tween(durationMillis = 620, easing = FastOutSlowInEasing)
+            animationSpec = tween(durationMillis = 420, easing = FastOutSlowInEasing)
         )
     }
 
+    val prepared = remember(slices) {
+        val total = slices.sumOf { it.amount }.takeIf { it > 0.0 } ?: return@remember emptyList()
+        slices.map { slice ->
+            PreparedPieSlice(
+                slice = slice,
+                color = LedgerFormatters.parseColorHex(slice.colorHex),
+                rawSweep = ((slice.amount / total) * 360.0).toFloat(),
+                shortName = if (slice.categoryName.length > 12) {
+                    slice.categoryName.take(11) + "…"
+                } else {
+                    slice.categoryName
+                },
+                pctText = String.format(Locale.US, "%.1f%%", slice.percentage)
+            )
+        }
+    }
+
     val density = LocalDensity.current
-    val labelTextSizePx = with(density) { 10.5.sp.toPx() }
-    val subTextSizePx = with(density) { 9.5.sp.toPx() }
+    val labelTextSizePx = with(density) { 10.sp.toPx() }
+    val subTextSizePx = with(density) { 9.sp.toPx() }
 
-    Canvas(modifier = modifier) {
-        val total = slices.sumOf { it.amount }.takeIf { it > 0.0 } ?: return@Canvas
-        val centerX = size.width / 2f
-        val centerY = size.height / 2f
-        val radius = minOf(size.width * 0.25f, size.height * 0.36f)
-        val topLeft = Offset(centerX - radius, centerY - radius)
-        val arcSize = Size(radius * 2f, radius * 2f)
-
-        var startAngle = -90f
-        val maxSweep = 360f * sweepProgress.value
-
-        val titlePaint = Paint().apply {
+    // Hoisted native Paint objects so animation frames allocate zero objects
+    val titlePaint = remember(labelTextSizePx) {
+        Paint().apply {
             isAntiAlias = true
             color = android.graphics.Color.parseColor("#F3F4F6")
             textSize = labelTextSizePx
             isFakeBoldText = true
         }
-        val pctPaint = Paint().apply {
+    }
+    val pctPaint = remember(subTextSizePx) {
+        Paint().apply {
             isAntiAlias = true
             color = android.graphics.Color.parseColor("#B8BDC8")
             textSize = subTextSizePx
         }
+    }
 
-        val visibleLabels = mutableListOf<Triple<Float, CategoryStatSlice, Color>>()
+    Canvas(modifier = modifier) {
+        if (prepared.isEmpty()) return@Canvas
+        val centerX = size.width / 2f
+        val centerY = size.height / 2f
+        val radius = minOf(size.width * 0.23f, size.height * 0.35f)
+        val topLeft = Offset(centerX - radius, centerY - radius)
+        val arcSize = Size(radius * 2f, radius * 2f)
 
-        slices.forEach { slice ->
-            val rawSweep = ((slice.amount / total) * 360.0).toFloat()
-            val drawnSweep = (startAngle + rawSweep - (-90f)).coerceAtMost(maxSweep) - (startAngle - (-90f))
+        var startAngle = -90f
+        val progress = sweepProgress.value
+        val maxSweep = 360f * progress
+        val labelAlpha = ((progress - 0.72f) / 0.28f).coerceIn(0f, 1f)
+
+        val visibleLabels = ArrayList<Pair<Float, PreparedPieSlice>>(6)
+
+        prepared.forEach { item ->
+            val drawnSweep = (startAngle + item.rawSweep - (-90f)).coerceAtMost(maxSweep) - (startAngle - (-90f))
             if (drawnSweep > 0.2f) {
-                val sliceColor = LedgerFormatters.parseColorHex(slice.colorHex)
                 drawArc(
-                    color = sliceColor,
+                    color = item.color,
                     startAngle = startAngle,
                     sweepAngle = drawnSweep,
                     useCenter = true,
@@ -464,54 +604,57 @@ private fun AnimatedLedgerPieChart(
                     useCenter = true,
                     topLeft = topLeft,
                     size = arcSize,
-                    style = Stroke(width = 2.2f)
+                    style = Stroke(width = 2.0f)
                 )
-                if (sweepProgress.value > 0.85f && slice.percentage >= 3.0) {
-                    visibleLabels.add(Triple(startAngle + rawSweep / 2f, slice, sliceColor))
+                if (labelAlpha > 0.02f && item.slice.percentage >= 3.5 && visibleLabels.size < 6) {
+                    visibleLabels.add((startAngle + item.rawSweep / 2f) to item)
                 }
             }
-            startAngle += rawSweep
+            startAngle += item.rawSweep
         }
 
-        // Draw crisp radial callout leader lines + labels (up to 6 top slices to avoid overlap)
-        val topLabeled = visibleLabels.take(6)
-        topLabeled.forEachIndexed { index, (midDeg, slice, _) ->
-            val rad = Math.toRadians(midDeg.toDouble())
-            val cosA = cos(rad).toFloat()
-            val sinA = sin(rad).toFloat()
+        if (labelAlpha > 0.02f && visibleLabels.isNotEmpty()) {
+            val alphaInt = (labelAlpha * 255f).roundToInt().coerceIn(0, 255)
+            titlePaint.alpha = alphaInt
+            pctPaint.alpha = alphaInt
+            val elbowBase = 14.dp.toPx()
+            val horizLen = 14.dp.toPx()
+            val textGap = 4.dp.toPx()
+            val edgeMargin = 8.dp.toPx()
 
-            val p1 = Offset(centerX + cosA * (radius * 0.98f), centerY + sinA * (radius * 0.98f))
-            val elbowRadius = radius + 18.dp.toPx() + (index % 2) * 8.dp.toPx()
-            val p2 = Offset(centerX + cosA * elbowRadius, centerY + sinA * elbowRadius)
-            val isRight = cosA >= 0f
-            val horizontalEnd = Offset(p2.x + if (isRight) 18.dp.toPx() else -18.dp.toPx(), p2.y)
+            visibleLabels.forEachIndexed { index, (midDeg, item) ->
+                val rad = Math.toRadians(midDeg.toDouble())
+                val cosA = cos(rad).toFloat()
+                val sinA = sin(rad).toFloat()
 
-            drawLine(
-                color = LedgerTextSecondary.copy(alpha = 0.7f),
-                start = p1,
-                end = p2,
-                strokeWidth = 1.6f
-            )
-            drawLine(
-                color = LedgerTextSecondary.copy(alpha = 0.7f),
-                start = p2,
-                end = horizontalEnd,
-                strokeWidth = 1.6f
-            )
+                val p1 = Offset(centerX + cosA * (radius * 0.98f), centerY + sinA * (radius * 0.98f))
+                val elbowRadius = radius + elbowBase + (index % 2) * 6.dp.toPx()
+                val p2 = Offset(centerX + cosA * elbowRadius, centerY + sinA * elbowRadius)
+                val isRight = cosA >= 0f
+                val rawEndX = p2.x + if (isRight) horizLen else -horizLen
+                val clampedEndX = rawEndX.coerceIn(edgeMargin + 48.dp.toPx(), size.width - edgeMargin - 48.dp.toPx())
+                val horizontalEnd = Offset(clampedEndX, p2.y.coerceIn(18.dp.toPx(), size.height - 18.dp.toPx()))
 
-            titlePaint.textAlign = if (isRight) Paint.Align.LEFT else Paint.Align.RIGHT
-            pctPaint.textAlign = if (isRight) Paint.Align.LEFT else Paint.Align.RIGHT
+                drawLine(
+                    color = LedgerTextSecondary.copy(alpha = 0.65f * labelAlpha),
+                    start = p1,
+                    end = p2,
+                    strokeWidth = 1.4f
+                )
+                drawLine(
+                    color = LedgerTextSecondary.copy(alpha = 0.65f * labelAlpha),
+                    start = p2,
+                    end = horizontalEnd,
+                    strokeWidth = 1.4f
+                )
 
-            val textX = horizontalEnd.x + if (isRight) 5.dp.toPx() else -5.dp.toPx()
-            val shortName = if (slice.categoryName.length > 14) {
-                slice.categoryName.take(13) + "…"
-            } else {
-                slice.categoryName
+                titlePaint.textAlign = if (isRight) Paint.Align.LEFT else Paint.Align.RIGHT
+                pctPaint.textAlign = if (isRight) Paint.Align.LEFT else Paint.Align.RIGHT
+
+                val textX = horizontalEnd.x + if (isRight) textGap else -textGap
+                drawContext.canvas.nativeCanvas.drawText(item.shortName, textX, horizontalEnd.y - 2f, titlePaint)
+                drawContext.canvas.nativeCanvas.drawText(item.pctText, textX, horizontalEnd.y + subTextSizePx + 2f, pctPaint)
             }
-            val pctText = String.format(Locale.US, "%.1f %%", slice.percentage)
-
-            drawContext.canvas.nativeCanvas.drawText(shortName, textX, horizontalEnd.y - 2f, titlePaint)
-            drawContext.canvas.nativeCanvas.drawText(pctText, textX, horizontalEnd.y + subTextSizePx + 2f, pctPaint)
         }
     }
 }

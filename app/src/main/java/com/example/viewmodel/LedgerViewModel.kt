@@ -1,6 +1,7 @@
 package com.example.viewmodel
 
 import android.util.Log
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.Account
@@ -24,6 +25,7 @@ import com.example.util.LedgerMasterUploadPreview
 import com.example.util.LedgerUploadKind
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -33,6 +35,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.Calendar
@@ -40,12 +43,14 @@ import java.util.Locale
 import java.util.UUID
 import kotlin.math.abs
 
+@Immutable
 sealed interface UiState<out T> {
     data object Loading : UiState<Nothing>
     data class Success<T>(val data: T) : UiState<T>
     data class Error(val message: String) : UiState<Nothing>
 }
 
+@Immutable
 data class AccountWithBalance(
     val account: Account,
     val balance: Double,
@@ -53,6 +58,7 @@ data class AccountWithBalance(
     val untaggedBalance: Double = 0.0
 )
 
+@Immutable
 data class AccountGroupSection(
     val group: AccountGroup,
     val accounts: List<AccountWithBalance>,
@@ -61,6 +67,7 @@ data class AccountGroupSection(
     val untaggedSubtotal: Double = 0.0
 )
 
+@Immutable
 data class DayTransactionGroup(
     val epochDay: Long,
     val transactions: List<LedgerTransaction>,
@@ -68,6 +75,7 @@ data class DayTransactionGroup(
     val dayExpense: Double
 )
 
+@Immutable
 data class CategoryStatSlice(
     val categoryId: String,
     val categoryName: String,
@@ -77,6 +85,7 @@ data class CategoryStatSlice(
     val transactions: List<LedgerTransaction>
 )
 
+@Immutable
 data class MonthlySummaryRow(
     val monthZeroBased: Int,
     val monthLabel: String,
@@ -85,6 +94,7 @@ data class MonthlySummaryRow(
     val net: Double
 )
 
+@Immutable
 data class NetWorthPeriodPoint(
     val key: String,
     val shortLabel: String,
@@ -95,6 +105,7 @@ data class NetWorthPeriodPoint(
     val netWorth: Double
 )
 
+@Immutable
 data class NetWorthAccountSnapshot(
     val account: Account,
     val groupName: String,
@@ -102,6 +113,38 @@ data class NetWorthAccountSnapshot(
     val balance: Double
 )
 
+@Immutable
+data class SpendingCategoryMeta(
+    val categoryId: String,
+    val name: String,
+    val colorHex: String,
+    val sixMonthTotal: Double,
+    val transactionCount: Int
+)
+
+@Immutable
+data class MonthlySpendingPoint(
+    val key: String,
+    val shortLabel: String,
+    val fullLabel: String,
+    val startEpochDay: Long,
+    val endEpochDay: Long,
+    val totalExpense: Double,
+    val byCategory: Map<String, Double>,
+    val transactions: List<LedgerTransaction>
+)
+
+@Immutable
+data class SpendingTrendsData(
+    val months: List<MonthlySpendingPoint>,
+    val categories: List<SpendingCategoryMeta>,
+    val sixMonthTotal: Double,
+    val monthlyAverage: Double,
+    val latestVsPreviousPct: Double?,
+    val peakMonth: MonthlySpendingPoint?
+)
+
+@Immutable
 data class LedgerDataBundle(
     val settings: UserSettings = UserSettings(),
     val accountGroups: List<AccountGroup> = emptyList(),
@@ -111,23 +154,37 @@ data class LedgerDataBundle(
     val budgets: List<Budget> = emptyList(),
     val notes: List<FinanceNote> = emptyList()
 ) {
-    val activeGroups: List<AccountGroup>
-        get() = accountGroups.filter { !it.archived }
+    val activeGroups: List<AccountGroup> by lazy {
+        accountGroups.filter { !it.archived }
+    }
 
-    val archivedGroups: List<AccountGroup>
-        get() = accountGroups.filter { it.archived }
+    val archivedGroups: List<AccountGroup> by lazy {
+        accountGroups.filter { it.archived }
+    }
 
-    val activeAccounts: List<Account>
-        get() = accounts.filter { !it.archived }
+    val activeAccounts: List<Account> by lazy {
+        accounts.filter { !it.archived }
+    }
 
-    val archivedAccounts: List<Account>
-        get() = accounts.filter { it.archived }
+    val archivedAccounts: List<Account> by lazy {
+        accounts.filter { it.archived }
+    }
 
-    val netWorthIncludedAccounts: List<Account>
-        get() = activeAccounts.filter { it.includeInNetWorth }
+    val netWorthIncludedAccounts: List<Account> by lazy {
+        activeAccounts.filter { it.includeInNetWorth }
+    }
 
-    val netWorthExcludedAccounts: List<Account>
-        get() = activeAccounts.filter { !it.includeInNetWorth }
+    val netWorthExcludedAccounts: List<Account> by lazy {
+        activeAccounts.filter { !it.includeInNetWorth }
+    }
+
+    private val accountsById: Map<String, Account> by lazy {
+        accounts.associateBy { it.id }
+    }
+
+    private val categoriesById: Map<String, Category> by lazy {
+        categories.associateBy { it.id }
+    }
 
     val allTaggings: List<String> by lazy {
         transactions.mapNotNull { it.effectiveTagging() }
@@ -258,12 +315,13 @@ data class LedgerDataBundle(
         get() = totalAssets - totalLiabilities
 
     fun accountName(accountId: String?): String =
-        accounts.firstOrNull { it.id == accountId }?.name ?: "Account"
+        if (accountId == null) "Account" else accountsById[accountId]?.name ?: "Account"
 
     fun categoryById(categoryId: String?): Category? =
-        categories.firstOrNull { it.id == categoryId }
+        if (categoryId == null) null else categoriesById[categoryId]
 }
 
+@Immutable
 data class FilterState(
     val selectedYear: Int = Calendar.getInstance().get(Calendar.YEAR),
     val selectedMonth: Int = Calendar.getInstance().get(Calendar.MONTH),
@@ -327,8 +385,13 @@ class LedgerViewModel(
         repository.observeBudgets(currentUserId),
         repository.observeNotes(currentUserId)
     ) { bundle, budgets, notes ->
-        UiState.Success(bundle.copy(budgets = budgets, notes = notes)) as UiState<LedgerDataBundle>
+        val full = bundle.copy(budgets = budgets, notes = notes)
+        // Pre-warm core aggregates on Dispatchers.Default so first UI frame never stalls
+        full.accountBalances
+        full.accountSections
+        UiState.Success(full) as UiState<LedgerDataBundle>
     }
+        .flowOn(Dispatchers.Default)
         .catch { error ->
             val firestoreError = generateSequence(error) { it.cause }
                 .filterIsInstance<FirebaseFirestoreException>()
@@ -588,6 +651,125 @@ class LedgerViewModel(
 
         return Triple(totalIncome, totalExpense, slices)
     }
+
+    fun computeSpendingTrends(
+        bundle: LedgerDataBundle,
+        monthsCount: Int = 6
+    ): SpendingTrendsData {
+        val count = monthsCount.coerceIn(2, 24)
+        val todayCal = LedgerFormatters.epochDayToCalendar(LedgerFormatters.todayEpochDay())
+        val endYear = todayCal.get(Calendar.YEAR)
+        val endMonth = todayCal.get(Calendar.MONTH)
+        val endMonthIdx = endYear * 12 + endMonth
+        val startMonthIdx = endMonthIdx - (count - 1)
+
+        val monthNames = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+        val palette = com.example.ui.theme.ChartColorHexes
+
+        val monthWindows = (startMonthIdx..endMonthIdx).map { mIdx ->
+            val y = mIdx / 12
+            val m = mIdx % 12
+            val startDay = LedgerFormatters.calendarToEpochDay(y, m, 1)
+            val endDay = LedgerFormatters.calendarToEpochDay(y, m, LedgerFormatters.daysInMonth(y, m))
+            val shortYear = (y % 100).toString().padStart(2, '0')
+            val shortLabel = if (y != endYear) "${monthNames[m]} '$shortYear" else monthNames[m]
+            MonthlyWindowSpec(
+                key = "$y-$m",
+                shortLabel = shortLabel,
+                fullLabel = "${monthNames[m]} $y",
+                startEpochDay = startDay,
+                endEpochDay = endDay
+            )
+        }
+
+        val overallStart = monthWindows.first().startEpochDay
+        val overallEnd = monthWindows.last().endEpochDay
+
+        val expenseTxs = bundle.transactions.filter {
+            it.txType() == TransactionType.EXPENSE && it.epochDay in overallStart..overallEnd
+        }
+
+        val categoryTotals = mutableMapOf<String, Double>()
+        val categoryCounts = mutableMapOf<String, Int>()
+        expenseTxs.forEach { tx ->
+            val catId = tx.categoryId ?: "uncategorized"
+            categoryTotals[catId] = (categoryTotals[catId] ?: 0.0) + tx.amount
+            categoryCounts[catId] = (categoryCounts[catId] ?: 0) + 1
+        }
+
+        val usedColors = mutableSetOf<String>()
+        var paletteCursor = 0
+        val categories = categoryTotals.entries
+            .sortedByDescending { it.value }
+            .map { (catId, total) ->
+                val cat = bundle.categoryById(catId)
+                val preferred = cat?.colorHex?.takeIf { it.isNotBlank() && it !in usedColors }
+                val assignedHex = preferred ?: run {
+                    var candidate = palette[paletteCursor % palette.size]
+                    var tries = 0
+                    while (candidate in usedColors && tries < palette.size) {
+                        paletteCursor++
+                        candidate = palette[paletteCursor % palette.size]
+                        tries++
+                    }
+                    paletteCursor++
+                    candidate
+                }
+                usedColors.add(assignedHex)
+                SpendingCategoryMeta(
+                    categoryId = catId,
+                    name = cat?.name ?: "Uncategorized",
+                    colorHex = assignedHex,
+                    sixMonthTotal = total,
+                    transactionCount = categoryCounts[catId] ?: 0
+                )
+            }
+
+        val months = monthWindows.map { win ->
+            val inMonth = expenseTxs.filter { it.epochDay in win.startEpochDay..win.endEpochDay }
+            val byCat = mutableMapOf<String, Double>()
+            var monthTotal = 0.0
+            inMonth.forEach { tx ->
+                val catId = tx.categoryId ?: "uncategorized"
+                byCat[catId] = (byCat[catId] ?: 0.0) + tx.amount
+                monthTotal += tx.amount
+            }
+            MonthlySpendingPoint(
+                key = win.key,
+                shortLabel = win.shortLabel,
+                fullLabel = win.fullLabel,
+                startEpochDay = win.startEpochDay,
+                endEpochDay = win.endEpochDay,
+                totalExpense = monthTotal,
+                byCategory = byCat,
+                transactions = inMonth.sortedByDescending { it.epochDay }
+            )
+        }
+
+        val sixMonthTotal = months.sumOf { it.totalExpense }
+        val monthlyAvg = if (months.isNotEmpty()) sixMonthTotal / months.size else 0.0
+        val latest = months.lastOrNull()?.totalExpense ?: 0.0
+        val previous = months.getOrNull(months.lastIndex - 1)?.totalExpense ?: 0.0
+        val latestVsPrevPct = if (previous > 0.0) ((latest - previous) / previous) * 100.0 else null
+        val peakMonth = months.filter { it.totalExpense > 0.0 }.maxByOrNull { it.totalExpense }
+
+        return SpendingTrendsData(
+            months = months,
+            categories = categories,
+            sixMonthTotal = sixMonthTotal,
+            monthlyAverage = monthlyAvg,
+            latestVsPreviousPct = latestVsPrevPct,
+            peakMonth = peakMonth
+        )
+    }
+
+    private data class MonthlyWindowSpec(
+        val key: String,
+        val shortLabel: String,
+        val fullLabel: String,
+        val startEpochDay: Long,
+        val endEpochDay: Long
+    )
 
     fun computeNetWorthSeries(
         bundle: LedgerDataBundle,

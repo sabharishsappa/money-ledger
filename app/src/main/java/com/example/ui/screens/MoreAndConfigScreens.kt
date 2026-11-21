@@ -1,6 +1,17 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -16,16 +27,20 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
@@ -40,6 +55,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material.icons.filled.Restore
@@ -63,6 +79,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
@@ -80,11 +97,13 @@ import com.example.data.CategoryType
 import com.example.data.LedgerTransaction
 import com.example.data.RepeatFrequency
 import com.example.ui.theme.ChartColorHexes
+import com.example.ui.theme.LedgerAmber
 import com.example.ui.theme.LedgerBackground
 import com.example.ui.theme.LedgerBlue
 import com.example.ui.theme.LedgerBorder
 import com.example.ui.theme.LedgerCoral
 import com.example.ui.theme.LedgerDivider
+import com.example.ui.theme.LedgerGreen
 import com.example.ui.theme.LedgerSurface
 import com.example.ui.theme.LedgerSurfaceElevated
 import com.example.ui.theme.LedgerSurfaceHighlight
@@ -106,13 +125,16 @@ enum class ConfigRoute {
     EXPENSE_CATEGORIES,
     BUDGET_SETTING,
     TAG_SETTING,
-    REPEAT_SETTING
+    REPEAT_SETTING,
+    APP_LOCK
 }
 
 @Composable
 fun MoreScreen(
     bundle: LedgerDataBundle,
+    appLockEnabled: Boolean = false,
     onOpenConfiguration: () -> Unit,
+    onOpenAppLock: () -> Unit = {},
     onExportCsv: () -> Unit,
     onImportExcel: () -> Unit,
     onMassUploadLedgers: () -> Unit,
@@ -162,134 +184,142 @@ fun MoreScreen(
         }
         HorizontalDivider(color = LedgerDivider)
 
-        // 3x2 Settings Action Grid
-        Column(modifier = Modifier.fillMaxWidth().background(LedgerSurface)) {
-            Row(modifier = Modifier.fillMaxWidth()) {
-                SettingsGridTile(
-                    icon = Icons.Filled.Settings,
-                    label = "Configuration",
-                    onClick = onOpenConfiguration,
-                    modifier = Modifier.weight(1f).testTag("more_configuration_tile")
-                )
-                SettingsGridTile(
-                    icon = Icons.Filled.FileDownload,
-                    label = "Export Excel",
-                    onClick = onExportCsv,
-                    modifier = Modifier.weight(1f).testTag("more_export_tile")
-                )
-                SettingsGridTile(
-                    icon = Icons.Filled.FileUpload,
-                    label = "Import Excel",
-                    onClick = onImportExcel,
-                    modifier = Modifier.weight(1f).testTag("more_import_tile")
-                )
-            }
-            Row(modifier = Modifier.fillMaxWidth()) {
-                SettingsGridTile(
-                    icon = Icons.Filled.AccountBalanceWallet,
-                    label = "Budgets",
-                    onClick = onOpenBudgets,
-                    modifier = Modifier.weight(1f).testTag("more_budgets_tile")
-                )
-                SettingsGridTile(
-                    icon = Icons.Filled.Palette,
-                    label = "Style",
-                    onClick = { showStyleDialog = true },
-                    modifier = Modifier.weight(1f).testTag("more_style_tile")
-                )
-                SettingsGridTile(
-                    icon = Icons.Filled.CloudDone,
-                    label = "Local Data",
-                    onClick = { showLocalDataDialog = true },
-                    modifier = Modifier.weight(1f).testTag("more_local_data_tile")
-                )
-            }
-        }
-        HorizontalDivider(color = LedgerDivider)
-
-        Spacer(modifier = Modifier.height(14.dp))
-
-        // Mass Upload Ledgers Quick Action Card
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = LedgerSurface,
-            border = BorderStroke(1.dp, LedgerBlue.copy(alpha = 0.45f)),
+        // Scrollable Settings Body (fits compact phones, landscape & tablets)
+        Column(
             modifier = Modifier
+                .weight(1f)
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .clickable(onClick = onMassUploadLedgers)
-                .testTag("more_mass_upload_ledgers_card")
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Row(
+            Column(
                 modifier = Modifier
+                    .widthIn(max = 680.dp)
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(bottom = 20.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Filled.FileUpload,
-                    contentDescription = null,
-                    tint = LedgerBlue,
-                    modifier = Modifier.size(22.dp)
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Mass Upload Ledgers",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = LedgerTextPrimary
+                // Uniformly aligned Settings Options List
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(LedgerSurface)
+                ) {
+                    SettingsListRow(
+                        icon = Icons.Filled.Settings,
+                        iconTint = LedgerTextPrimary,
+                        title = "Configuration",
+                        subtitle = "Accounts, categories, currency & repeat rules",
+                        onClick = onOpenConfiguration,
+                        modifier = Modifier.testTag("more_configuration_tile")
                     )
-                    Text(
-                        text = "Bulk add accounts & categories via Excel (Ledger Name, Group)",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = LedgerTextSecondary
+                    HorizontalDivider(
+                        color = LedgerDivider,
+                        modifier = Modifier.padding(start = 66.dp)
+                    )
+                    SettingsListRow(
+                        icon = Icons.Filled.AccountBalanceWallet,
+                        iconTint = LedgerCoral,
+                        title = "Budgets",
+                        subtitle = "Monthly spending limits by category",
+                        onClick = onOpenBudgets,
+                        modifier = Modifier.testTag("more_budgets_tile")
+                    )
+                    HorizontalDivider(
+                        color = LedgerDivider,
+                        modifier = Modifier.padding(start = 66.dp)
+                    )
+                    SettingsListRow(
+                        icon = Icons.Filled.Lock,
+                        iconTint = if (appLockEnabled) LedgerGreen else LedgerCoral,
+                        title = "App Lock",
+                        subtitle = if (appLockEnabled) {
+                            "4-digit PIN lock • Enabled"
+                        } else {
+                            "Protect app with a 4-digit PIN"
+                        },
+                        onClick = onOpenAppLock,
+                        modifier = Modifier.testTag("more_app_lock_tile")
+                    )
+                    HorizontalDivider(
+                        color = LedgerDivider,
+                        modifier = Modifier.padding(start = 66.dp)
+                    )
+                    SettingsListRow(
+                        icon = Icons.Filled.FileDownload,
+                        iconTint = LedgerGreen,
+                        title = "Export Excel",
+                        subtitle = "Download transactions in Excel format",
+                        onClick = onExportCsv,
+                        modifier = Modifier.testTag("more_export_tile")
+                    )
+                    HorizontalDivider(
+                        color = LedgerDivider,
+                        modifier = Modifier.padding(start = 66.dp)
+                    )
+                    SettingsListRow(
+                        icon = Icons.Filled.FileUpload,
+                        iconTint = LedgerBlue,
+                        title = "Import Excel",
+                        subtitle = "Import transactions from Excel / CSV",
+                        onClick = onImportExcel,
+                        modifier = Modifier.testTag("more_import_tile")
+                    )
+                    HorizontalDivider(
+                        color = LedgerDivider,
+                        modifier = Modifier.padding(start = 66.dp)
+                    )
+                    SettingsListRow(
+                        icon = Icons.Filled.FileUpload,
+                        iconTint = LedgerBlue,
+                        title = "Mass Upload Ledgers",
+                        subtitle = "Bulk add accounts & categories via Excel",
+                        onClick = onMassUploadLedgers,
+                        modifier = Modifier.testTag("more_mass_upload_ledgers_card")
+                    )
+                    HorizontalDivider(
+                        color = LedgerDivider,
+                        modifier = Modifier.padding(start = 66.dp)
+                    )
+                    SettingsListRow(
+                        icon = Icons.Filled.Palette,
+                        iconTint = LedgerAmber,
+                        title = "Style",
+                        subtitle = "Dark charcoal theme & color coding",
+                        onClick = { showStyleDialog = true },
+                        modifier = Modifier.testTag("more_style_tile")
+                    )
+                    HorizontalDivider(
+                        color = LedgerDivider,
+                        modifier = Modifier.padding(start = 66.dp)
+                    )
+                    SettingsListRow(
+                        icon = Icons.Filled.CloudDone,
+                        iconTint = LedgerBlue,
+                        title = "Local Data",
+                        subtitle = "${bundle.activeAccounts.size} accounts • ${bundle.transactions.size} entries • ${bundle.categories.size} categories",
+                        onClick = { showLocalDataDialog = true },
+                        modifier = Modifier.testTag("more_local_data_tile")
+                    )
+                    HorizontalDivider(
+                        color = LedgerDivider,
+                        modifier = Modifier.padding(start = 66.dp)
+                    )
+                    SettingsListRow(
+                        icon = Icons.AutoMirrored.Filled.HelpOutline,
+                        iconTint = LedgerTextSecondary,
+                        title = "Quick Guide",
+                        subtitle = "How to use Transactions, Accounts & Reports",
+                        onClick = { showHelpDialog = true },
+                        modifier = Modifier.testTag("more_quick_guide_tile")
                     )
                 }
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = LedgerTextMuted
-                )
-            }
-        }
+                HorizontalDivider(color = LedgerDivider)
 
-        Spacer(modifier = Modifier.height(14.dp))
-
-        // Local Testing Mode Card
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = LedgerSurface,
-            border = BorderStroke(1.dp, LedgerDivider),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Filled.CloudDone,
-                        contentDescription = null,
-                        tint = LedgerBlue,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Local Testing Mode",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = LedgerTextPrimary
-                    )
-                }
-                Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Sign-in is temporarily disabled while testing. All entries are saved locally on this device.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = LedgerTextSecondary
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "${bundle.activeAccounts.size} active accounts • ${bundle.transactions.size} ledger entries • ${bundle.categories.size} categories",
+                    text = "Local Testing Mode • All data is saved locally on this device.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = LedgerTextMuted
+                    color = LedgerTextMuted,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
                 )
             }
         }
@@ -342,8 +372,8 @@ fun MoreScreen(
             text = {
                 Text(
                     "• Trans.: Browse Daily, Calendar, Monthly, Total, and Notes views. Tap + to add Income, Expense, or Transfer entries.\n\n" +
-                        "• Stats: Switch Weekly, Monthly, Annually, or Custom Period and tap any category slice/row to inspect its transactions.\n\n" +
-                        "• Accounts: Track Assets, Liabilities, and Net Total across custom account groups. Tap any account for its full statement.",
+                        "• Accounts: Track Assets, Liabilities, and Net Total across custom account groups. Tap any account for its full statement.\n\n" +
+                        "• Reports: Open Stats, Net Worth, 6-Month Spending Trends, and Monthly Budget reports from one unified list.",
                     color = LedgerTextSecondary
                 )
             },
@@ -355,30 +385,60 @@ fun MoreScreen(
 }
 
 @Composable
-private fun SettingsGridTile(
+private fun SettingsListRow(
     icon: ImageVector,
-    label: String,
+    iconTint: Color,
+    title: String,
+    subtitle: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Column(
+    Row(
         modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 60.dp)
             .clickable(onClick = onClick)
-            .padding(vertical = 22.dp, horizontal = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .padding(horizontal = 16.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(iconTint.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = title,
+                tint = iconTint,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                color = LedgerTextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = LedgerTextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
         Icon(
-            imageVector = icon,
-            contentDescription = label,
-            tint = LedgerTextPrimary,
-            modifier = Modifier.size(28.dp)
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = LedgerTextSecondary,
-            textAlign = TextAlign.Center
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = LedgerTextMuted,
+            modifier = Modifier.size(20.dp)
         )
     }
 }
@@ -388,6 +448,9 @@ fun ConfigurationHostScreen(
     initialRoute: ConfigRoute,
     bundle: LedgerDataBundle,
     viewModel: LedgerViewModel,
+    appLockEnabled: Boolean = false,
+    onAppLockStateChanged: (enabled: Boolean, message: String) -> Unit = { _, _ -> },
+    onLockNow: () -> Unit = {},
     onBackToMain: () -> Unit,
     onEditTransaction: (LedgerTransaction) -> Unit,
     onMassUploadLedgers: () -> Unit,
@@ -406,60 +469,83 @@ fun ConfigurationHostScreen(
 
     BackHandler { navigateUp() }
 
-    when (currentRoute) {
-        ConfigRoute.ROOT -> ConfigurationMenuScreen(
-            bundle = bundle,
-            viewModel = viewModel,
-            onBack = onBackToMain,
-            onNavigate = { currentRoute = it },
-            onMassUploadLedgers = onMassUploadLedgers,
-            onCreateCategoryLedger = onCreateCategoryLedger
-        )
-        ConfigRoute.ACCOUNT_GROUPS -> AccountGroupSettingScreen(
-            bundle = bundle,
-            viewModel = viewModel,
-            onBack = { navigateUp() }
-        )
-        ConfigRoute.ACCOUNTS_SETTING -> AccountsSettingScreen(
-            bundle = bundle,
-            viewModel = viewModel,
-            onBack = { navigateUp() }
-        )
-        ConfigRoute.DELETED_ACCOUNTS -> DeletedAccountsScreen(
-            bundle = bundle,
-            viewModel = viewModel,
-            onBack = { navigateUp() }
-        )
-        ConfigRoute.INCOME_CATEGORIES -> CategorySettingScreen(
-            categoryType = CategoryType.INCOME,
-            bundle = bundle,
-            viewModel = viewModel,
-            onBack = { navigateUp() },
-            onCreateCategoryLedger = onCreateCategoryLedger,
-            onPostEntryForCategoryLedger = onPostEntryForCategoryLedger
-        )
-        ConfigRoute.EXPENSE_CATEGORIES -> CategorySettingScreen(
-            categoryType = CategoryType.EXPENSE,
-            bundle = bundle,
-            viewModel = viewModel,
-            onBack = { navigateUp() },
-            onCreateCategoryLedger = onCreateCategoryLedger,
-            onPostEntryForCategoryLedger = onPostEntryForCategoryLedger
-        )
-        ConfigRoute.BUDGET_SETTING -> BudgetSettingScreen(
-            bundle = bundle,
-            viewModel = viewModel,
-            onBack = { navigateUp() }
-        )
-        ConfigRoute.TAG_SETTING -> TagSettingScreen(
-            bundle = bundle,
-            onBack = { navigateUp() }
-        )
-        ConfigRoute.REPEAT_SETTING -> RepeatSettingScreen(
-            bundle = bundle,
-            onBack = { navigateUp() },
-            onEditTransaction = onEditTransaction
-        )
+    AnimatedContent(
+        targetState = currentRoute,
+        transitionSpec = {
+            val goingBack = targetState == ConfigRoute.ROOT
+            if (goingBack) {
+                (slideInHorizontally(tween(190)) { -it / 5 } + fadeIn(tween(180))) togetherWith
+                    (slideOutHorizontally(tween(160)) { it / 5 } + fadeOut(tween(130)))
+            } else {
+                (slideInHorizontally(tween(190)) { it / 5 } + fadeIn(tween(180))) togetherWith
+                    (slideOutHorizontally(tween(160)) { -it / 5 } + fadeOut(tween(130)))
+            }
+        },
+        label = "config_route_transition"
+    ) { route ->
+        when (route) {
+            ConfigRoute.ROOT -> ConfigurationMenuScreen(
+                bundle = bundle,
+                viewModel = viewModel,
+                appLockEnabled = appLockEnabled,
+                onBack = onBackToMain,
+                onNavigate = { currentRoute = it },
+                onMassUploadLedgers = onMassUploadLedgers,
+                onCreateCategoryLedger = onCreateCategoryLedger
+            )
+            ConfigRoute.ACCOUNT_GROUPS -> AccountGroupSettingScreen(
+                bundle = bundle,
+                viewModel = viewModel,
+                onBack = { navigateUp() }
+            )
+            ConfigRoute.ACCOUNTS_SETTING -> AccountsSettingScreen(
+                bundle = bundle,
+                viewModel = viewModel,
+                onBack = { navigateUp() }
+            )
+            ConfigRoute.DELETED_ACCOUNTS -> DeletedAccountsScreen(
+                bundle = bundle,
+                viewModel = viewModel,
+                onBack = { navigateUp() }
+            )
+            ConfigRoute.INCOME_CATEGORIES -> CategorySettingScreen(
+                categoryType = CategoryType.INCOME,
+                bundle = bundle,
+                viewModel = viewModel,
+                onBack = { navigateUp() },
+                onCreateCategoryLedger = onCreateCategoryLedger,
+                onPostEntryForCategoryLedger = onPostEntryForCategoryLedger
+            )
+            ConfigRoute.EXPENSE_CATEGORIES -> CategorySettingScreen(
+                categoryType = CategoryType.EXPENSE,
+                bundle = bundle,
+                viewModel = viewModel,
+                onBack = { navigateUp() },
+                onCreateCategoryLedger = onCreateCategoryLedger,
+                onPostEntryForCategoryLedger = onPostEntryForCategoryLedger
+            )
+            ConfigRoute.BUDGET_SETTING -> MonthlyBudgetScreen(
+                bundle = bundle,
+                viewModel = viewModel,
+                onBack = { navigateUp() },
+                onEditTransaction = onEditTransaction
+            )
+            ConfigRoute.TAG_SETTING -> TagSettingScreen(
+                bundle = bundle,
+                onBack = { navigateUp() }
+            )
+            ConfigRoute.REPEAT_SETTING -> RepeatSettingScreen(
+                bundle = bundle,
+                onBack = { navigateUp() },
+                onEditTransaction = onEditTransaction
+            )
+            ConfigRoute.APP_LOCK -> AppLockSettingsScreen(
+                isEnabled = appLockEnabled,
+                onBack = { navigateUp() },
+                onLockStateChanged = onAppLockStateChanged,
+                onLockNow = onLockNow
+            )
+        }
     }
 }
 
@@ -467,6 +553,7 @@ fun ConfigurationHostScreen(
 private fun ConfigurationMenuScreen(
     bundle: LedgerDataBundle,
     viewModel: LedgerViewModel,
+    appLockEnabled: Boolean,
     onBack: () -> Unit,
     onNavigate: (ConfigRoute) -> Unit,
     onMassUploadLedgers: () -> Unit,
@@ -557,6 +644,12 @@ private fun ConfigurationMenuScreen(
                         val next = if (settings.weeklyStartDay == "SUNDAY") "MONDAY" else "SUNDAY"
                         viewModel.updateSettings(settings.copy(weeklyStartDay = next))
                     }
+                )
+                ConfigRow(
+                    title = "App Lock (4-Digit PIN)",
+                    value = if (appLockEnabled) "ON" else "OFF",
+                    valueColor = if (appLockEnabled) LedgerGreen else LedgerTextMuted,
+                    onClick = { onNavigate(ConfigRoute.APP_LOCK) }
                 )
             }
         }
@@ -1026,15 +1119,24 @@ private fun CategorySettingScreen(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 24.dp)
         ) {
-            items(cats, key = { it.id }) { cat ->
+            items(cats, key = { it.id }, contentType = { "category_group" }) { cat ->
                 val isExpanded = cat.id !in collapsedCategoryIds
+                val chevronRotation by animateFloatAsState(
+                    targetValue = if (isExpanded) 90f else 0f,
+                    animationSpec = tween(180),
+                    label = "cat_chevron_${cat.id}"
+                )
                 val ledgerCountLabel = when (cat.subcategories.size) {
                     0 -> "No $typeWord ledgers yet"
                     1 -> "1 $typeWord ledger"
                     else -> "${cat.subcategories.size} $typeWord ledgers"
                 }
 
-                Column(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .animateItem()
+                ) {
                     // Category Header Row
                     Row(
                         modifier = Modifier
@@ -1052,14 +1154,12 @@ private fun CategorySettingScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            imageVector = if (isExpanded) {
-                                Icons.Filled.KeyboardArrowDown
-                            } else {
-                                Icons.AutoMirrored.Filled.KeyboardArrowRight
-                            },
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                             contentDescription = if (isExpanded) "Collapse ${cat.name}" else "Expand ${cat.name}",
                             tint = LedgerTextSecondary,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier
+                                .size(18.dp)
+                                .rotate(chevronRotation)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Box(
@@ -1112,119 +1212,129 @@ private fun CategorySettingScreen(
                     }
 
                     // Nested Expense / Income Ledgers under this Category
-                    if (isExpanded) {
-                        cat.subcategories.forEach { ledger ->
-                            val statKey = cat.id to ledger.trim().lowercase(Locale.US)
-                            val entryCount = ledgerStats.first[statKey] ?: 0
-                            val totalAmt = ledgerStats.second[statKey] ?: 0.0
+                    AnimatedVisibility(
+                        visible = isExpanded,
+                        enter = expandVertically(tween(180)) + fadeIn(tween(150)),
+                        exit = shrinkVertically(tween(150)) + fadeOut(tween(110))
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            cat.subcategories.forEach { ledger ->
+                                val statKey = cat.id to ledger.trim().lowercase(Locale.US)
+                                val entryCount = ledgerStats.first[statKey] ?: 0
+                                val totalAmt = ledgerStats.second[statKey] ?: 0.0
 
-                            HorizontalDivider(color = LedgerDivider.copy(alpha = 0.6f), thickness = 0.5.dp)
+                                HorizontalDivider(color = LedgerDivider.copy(alpha = 0.6f), thickness = 0.5.dp)
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(LedgerBackground)
+                                        .clickable {
+                                            onPostEntryForCategoryLedger(categoryType, cat.id, ledger)
+                                        }
+                                        .padding(start = 34.dp, end = 8.dp, top = 9.dp, bottom = 9.dp)
+                                        .testTag("category_ledger_row_${cat.id}_$ledger"),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .width(2.5.dp)
+                                            .height(22.dp)
+                                            .background(accentColor.copy(alpha = 0.75f), RoundedCornerShape(2.dp))
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                        Text(
+                                            text = ledger,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium,
+                                            color = LedgerTextPrimary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (entryCount > 0) {
+                                            Text(
+                                                text = "$entryCount ${if (entryCount == 1) "entry" else "entries"} • ${LedgerFormatters.formatWholeAmount(totalAmt, symbol)}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = LedgerTextMuted,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                    Surface(
+                                        onClick = {
+                                            onPostEntryForCategoryLedger(categoryType, cat.id, ledger)
+                                        },
+                                        shape = RoundedCornerShape(7.dp),
+                                        color = accentColor.copy(alpha = 0.16f),
+                                        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.5f)),
+                                        modifier = Modifier.testTag("post_entry_ledger_${cat.id}_$ledger")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Add,
+                                                contentDescription = "Post entry to $ledger",
+                                                tint = accentColor,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text(
+                                                text = "Post",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = accentColor,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1,
+                                                softWrap = false
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    IconButton(
+                                        onClick = { viewModel.removeCategoryLedger(cat, ledger) },
+                                        modifier = Modifier
+                                            .size(34.dp)
+                                            .testTag("remove_ledger_${cat.id}_$ledger")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Close,
+                                            contentDescription = "Remove $ledger",
+                                            tint = LedgerTextMuted,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Inline "+ Add Ledger" row inside this Category
+                            HorizontalDivider(color = LedgerDivider.copy(alpha = 0.5f), thickness = 0.5.dp)
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(LedgerBackground)
-                                    .clickable {
-                                        onPostEntryForCategoryLedger(categoryType, cat.id, ledger)
-                                    }
-                                    .padding(start = 34.dp, end = 8.dp, top = 9.dp, bottom = 9.dp)
-                                    .testTag("category_ledger_row_${cat.id}_$ledger"),
+                                    .background(LedgerSurfaceElevated.copy(alpha = 0.5f))
+                                    .clickable { onCreateCategoryLedger(categoryType, cat.id) }
+                                    .padding(start = 34.dp, end = 16.dp, top = 9.dp, bottom = 9.dp)
+                                    .testTag("add_ledger_to_cat_${cat.id}"),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .width(2.5.dp)
-                                        .height(22.dp)
-                                        .background(accentColor.copy(alpha = 0.75f), RoundedCornerShape(2.dp))
+                                Icon(
+                                    imageVector = Icons.Filled.Add,
+                                    contentDescription = null,
+                                    tint = accentColor,
+                                    modifier = Modifier.size(16.dp)
                                 )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                                    Text(
-                                        text = ledger,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium,
-                                        color = LedgerTextPrimary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    if (entryCount > 0) {
-                                        Text(
-                                            text = "$entryCount ${if (entryCount == 1) "entry" else "entries"} • ${LedgerFormatters.formatWholeAmount(totalAmt, symbol)}",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = LedgerTextMuted
-                                        )
-                                    }
-                                }
-                                Surface(
-                                    onClick = {
-                                        onPostEntryForCategoryLedger(categoryType, cat.id, ledger)
-                                    },
-                                    shape = RoundedCornerShape(7.dp),
-                                    color = accentColor.copy(alpha = 0.16f),
-                                    border = BorderStroke(1.dp, accentColor.copy(alpha = 0.5f)),
-                                    modifier = Modifier.testTag("post_entry_ledger_${cat.id}_$ledger")
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Add,
-                                            contentDescription = "Post entry to $ledger",
-                                            tint = accentColor,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(3.dp))
-                                        Text(
-                                            text = "Post",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = accentColor,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                    }
-                                }
-                                Spacer(modifier = Modifier.width(2.dp))
-                                IconButton(
-                                    onClick = { viewModel.removeCategoryLedger(cat, ledger) },
-                                    modifier = Modifier
-                                        .size(34.dp)
-                                        .testTag("remove_ledger_${cat.id}_$ledger")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.Close,
-                                        contentDescription = "Remove $ledger",
-                                        tint = LedgerTextMuted,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Add $typeWord Ledger under ${cat.name}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = accentColor,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
-                        }
-
-                        // Inline "+ Add Ledger" row inside this Category
-                        HorizontalDivider(color = LedgerDivider.copy(alpha = 0.5f), thickness = 0.5.dp)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(LedgerSurfaceElevated.copy(alpha = 0.5f))
-                                .clickable { onCreateCategoryLedger(categoryType, cat.id) }
-                                .padding(start = 34.dp, end = 16.dp, top = 9.dp, bottom = 9.dp)
-                                .testTag("add_ledger_to_cat_${cat.id}"),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Add,
-                                contentDescription = null,
-                                tint = accentColor,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Add $typeWord Ledger under ${cat.name}",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = accentColor,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
                         }
                     }
 
@@ -1312,104 +1422,6 @@ private fun CategorySettingScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showDialog = false }) { Text("Cancel", color = LedgerTextSecondary) }
-            }
-        )
-    }
-}
-
-@Composable
-private fun BudgetSettingScreen(
-    bundle: LedgerDataBundle,
-    viewModel: LedgerViewModel,
-    onBack: () -> Unit
-) {
-    val expenseCats = remember(bundle.categories) {
-        bundle.categories.filter { it.categoryType() == CategoryType.EXPENSE }
-    }
-    val symbol = bundle.settings.mainCurrencySymbol
-    var selectedCat by remember { mutableStateOf<Category?>(null) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(LedgerBackground)
-            .statusBarsPadding()
-            .navigationBarsPadding()
-    ) {
-        ConfigTopBar(title = "Budget Setting", onBack = onBack)
-
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(expenseCats, key = { it.id }) { cat ->
-                val budget = bundle.budgets.firstOrNull { it.categoryId == cat.id }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(LedgerSurface)
-                        .clickable { selectedCat = cat }
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(12.dp)
-                            .clip(CircleShape)
-                            .background(LedgerFormatters.parseColorHex(cat.colorHex))
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(cat.name, style = MaterialTheme.typography.bodyLarge, color = LedgerTextPrimary, modifier = Modifier.weight(1f))
-                    Text(
-                        text = if (budget != null && budget.monthlyLimit > 0.0) {
-                            LedgerFormatters.formatAmount(budget.monthlyLimit, symbol)
-                        } else "Not set",
-                        style = TabularAmountStyle,
-                        color = if (budget != null && budget.monthlyLimit > 0.0) LedgerCoral else LedgerTextMuted
-                    )
-                }
-                HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
-            }
-        }
-    }
-
-    if (selectedCat != null) {
-        val cat = selectedCat!!
-        val existingBudget = bundle.budgets.firstOrNull { it.categoryId == cat.id }
-        var limitText by remember(cat) {
-            mutableStateOf(existingBudget?.monthlyLimit?.toString().orEmpty())
-        }
-
-        AlertDialog(
-            onDismissRequest = { selectedCat = null },
-            containerColor = LedgerSurface,
-            title = { Text("${cat.name} Monthly Budget", color = LedgerTextPrimary) },
-            text = {
-                OutlinedTextField(
-                    value = limitText,
-                    onValueChange = { raw ->
-                        val filtered = raw.filter { it.isDigit() || it == '.' }
-                        if (filtered.count { it == '.' } <= 1) limitText = filtered.take(12)
-                    },
-                    label = { Text("Monthly Limit ($symbol)") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val value = limitText.trim().toDoubleOrNull() ?: 0.0
-                        if (value > 0.0) {
-                            viewModel.saveBudget(cat.id, value)
-                        } else if (existingBudget != null) {
-                            viewModel.deleteBudget(existingBudget.id)
-                        }
-                        selectedCat = null
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = LedgerCoral)
-                ) { Text("Save") }
-            },
-            dismissButton = {
-                TextButton(onClick = { selectedCat = null }) { Text("Cancel", color = LedgerTextSecondary) }
             }
         )
     }

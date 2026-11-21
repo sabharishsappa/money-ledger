@@ -1,5 +1,12 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -14,8 +21,10 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.AlertDialog
@@ -83,7 +92,11 @@ fun CreateCategoryLedgerDialog(
     }
 
     val selectedCategory = categoriesForType.firstOrNull { it.id == selectedCategoryId }
-    val accentColor = if (selectedType == CategoryType.INCOME) LedgerBlue else LedgerCoral
+    val accentColor by animateColorAsState(
+        targetValue = if (selectedType == CategoryType.INCOME) LedgerBlue else LedgerCoral,
+        animationSpec = tween(180),
+        label = "create_ledger_accent"
+    )
     val typeLabel = if (selectedType == CategoryType.INCOME) "Income" else "Expense"
     val dialogTitle = when {
         !lockType -> "Create Expense / Income Ledger"
@@ -98,11 +111,18 @@ fun CreateCategoryLedgerDialog(
             Text(
                 text = dialogTitle,
                 color = LedgerTextPrimary,
-                fontWeight = FontWeight.SemiBold
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 if (!lockType) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
@@ -120,10 +140,25 @@ fun CreateCategoryLedgerDialog(
                             ).forEach { (typeOpt, label) ->
                                 val active = selectedType == typeOpt
                                 val optAccent = if (typeOpt == CategoryType.INCOME) LedgerBlue else LedgerCoral
+                                val optBg by animateColorAsState(
+                                    targetValue = if (active) optAccent.copy(alpha = 0.2f) else LedgerSurfaceElevated,
+                                    animationSpec = tween(160),
+                                    label = "opt_bg_${typeOpt.name}"
+                                )
+                                val optBorder by animateColorAsState(
+                                    targetValue = if (active) optAccent else LedgerBorder,
+                                    animationSpec = tween(160),
+                                    label = "opt_border_${typeOpt.name}"
+                                )
+                                val optText by animateColorAsState(
+                                    targetValue = if (active) optAccent else LedgerTextSecondary,
+                                    animationSpec = tween(160),
+                                    label = "opt_text_${typeOpt.name}"
+                                )
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
-                                    color = if (active) optAccent.copy(alpha = 0.2f) else LedgerSurfaceElevated,
-                                    border = BorderStroke(1.dp, if (active) optAccent else LedgerBorder),
+                                    color = optBg,
+                                    border = BorderStroke(1.dp, optBorder),
                                     modifier = Modifier
                                         .weight(1f)
                                         .clickable { selectedType = typeOpt }
@@ -136,8 +171,10 @@ fun CreateCategoryLedgerDialog(
                                         Text(
                                             text = label,
                                             style = MaterialTheme.typography.labelLarge,
-                                            color = if (active) optAccent else LedgerTextSecondary,
-                                            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal
+                                            color = optText,
+                                            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                                            maxLines = 1,
+                                            softWrap = false
                                         )
                                     }
                                 }
@@ -276,7 +313,15 @@ fun CreateCategoryLedgerDialog(
                 )
 
                 val cleanName = ledgerName.trim()
+                var lastPreviewLabel by remember { mutableStateOf("") }
                 if (selectedCategory != null && cleanName.isNotEmpty()) {
+                    lastPreviewLabel = "${selectedCategory.name} / $cleanName"
+                }
+                AnimatedVisibility(
+                    visible = selectedCategory != null && cleanName.isNotEmpty(),
+                    enter = expandVertically(tween(160)) + fadeIn(tween(140)),
+                    exit = shrinkVertically(tween(140)) + fadeOut(tween(110))
+                ) {
                     Surface(
                         shape = RoundedCornerShape(8.dp),
                         color = accentColor.copy(alpha = 0.12f),
@@ -291,7 +336,7 @@ fun CreateCategoryLedgerDialog(
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "${selectedCategory.name} / $cleanName",
+                                text = lastPreviewLabel,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = accentColor,
                                 fontWeight = FontWeight.SemiBold,

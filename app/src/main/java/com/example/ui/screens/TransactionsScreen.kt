@@ -1,11 +1,24 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -13,9 +26,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -200,11 +215,15 @@ fun TransactionsScreen(
             }
 
             // Expandable Search Bar
-            AnimatedVisibility(visible = showSearchBar) {
+            AnimatedVisibility(
+                visible = showSearchBar,
+                enter = expandVertically(tween(180)) + fadeIn(tween(150)),
+                exit = shrinkVertically(tween(160)) + fadeOut(tween(120))
+            ) {
                 OutlinedTextField(
                     value = filter.searchQuery,
                     onValueChange = { viewModel.setSearchQuery(it) },
-                    placeholder = { Text("Search note, category, account, tag...", color = LedgerTextMuted) },
+                    placeholder = { Text("Search note, category, account, tag...", color = LedgerTextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     singleLine = true,
                     trailingIcon = {
                         if (filter.searchQuery.isNotEmpty()) {
@@ -230,7 +249,11 @@ fun TransactionsScreen(
             }
 
             // Expandable Tagging Filter Row
-            AnimatedVisibility(visible = showTagFilterRow && bundle.allTaggings.isNotEmpty()) {
+            AnimatedVisibility(
+                visible = showTagFilterRow && bundle.allTaggings.isNotEmpty(),
+                enter = expandVertically(tween(180)) + fadeIn(tween(150)),
+                exit = shrinkVertically(tween(160)) + fadeOut(tween(120))
+            ) {
                 LazyRow(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -273,6 +296,16 @@ fun TransactionsScreen(
             ) {
                 TransactionsSubTab.entries.forEach { tab ->
                     val selected = filter.subTab == tab
+                    val textColor by animateColorAsState(
+                        targetValue = if (selected) LedgerTextPrimary else LedgerTextSecondary,
+                        animationSpec = tween(160),
+                        label = "subtab_text_${tab.name}"
+                    )
+                    val indicatorColor by animateColorAsState(
+                        targetValue = if (selected) LedgerCoral else Color.Transparent,
+                        animationSpec = tween(180),
+                        label = "subtab_indicator_${tab.name}"
+                    )
                     Column(
                         modifier = Modifier
                             .weight(1f)
@@ -282,17 +315,19 @@ fun TransactionsScreen(
                     ) {
                         Text(
                             text = tab.label,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = if (selected) LedgerTextPrimary else LedgerTextSecondary,
+                            style = MaterialTheme.typography.titleSmall.copy(fontSize = 13.sp),
+                            color = textColor,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                             maxLines = 1,
-                            modifier = Modifier.padding(vertical = 10.dp)
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 2.dp, vertical = 10.dp)
                         )
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(2.dp)
-                                .background(if (selected) LedgerCoral else Color.Transparent)
+                                .background(indicatorColor)
                         )
                     }
                 }
@@ -301,98 +336,123 @@ fun TransactionsScreen(
             HorizontalDivider(color = LedgerDivider, thickness = 1.dp)
 
             // 3-Column Income / Expenses / Total Summary Strip
-            if (filter.subTab != TransactionsSubTab.NOTE) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(LedgerSurface)
-                        .padding(vertical = 10.dp, horizontal = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    SummaryMetricColumn(
-                        label = "Income",
-                        value = LedgerFormatters.formatAmount(monthIncome, symbol, includeSymbol = false),
-                        valueColor = LedgerBlue,
-                        modifier = Modifier.weight(1f)
-                    )
-                    SummaryMetricColumn(
-                        label = "Expenses",
-                        value = LedgerFormatters.formatAmount(monthExpense, symbol, includeSymbol = false),
-                        valueColor = LedgerCoral,
-                        modifier = Modifier.weight(1f)
-                    )
-                    SummaryMetricColumn(
-                        label = "Total",
-                        value = LedgerFormatters.formatAmount(monthTotal, symbol, includeSymbol = false),
-                        valueColor = LedgerTextPrimary,
-                        modifier = Modifier.weight(1f)
-                    )
+            AnimatedVisibility(
+                visible = filter.subTab != TransactionsSubTab.NOTE,
+                enter = expandVertically(tween(180)) + fadeIn(tween(150)),
+                exit = shrinkVertically(tween(150)) + fadeOut(tween(120))
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(LedgerSurface)
+                            .padding(vertical = 8.dp, horizontal = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        SummaryMetricColumn(
+                            label = "Income",
+                            value = LedgerFormatters.formatAmount(monthIncome, symbol, includeSymbol = false),
+                            valueColor = LedgerBlue,
+                            modifier = Modifier.weight(1f)
+                        )
+                        SummaryMetricColumn(
+                            label = "Expenses",
+                            value = LedgerFormatters.formatAmount(monthExpense, symbol, includeSymbol = false),
+                            valueColor = LedgerCoral,
+                            modifier = Modifier.weight(1f)
+                        )
+                        SummaryMetricColumn(
+                            label = "Total",
+                            value = LedgerFormatters.formatAmount(monthTotal, symbol, includeSymbol = false),
+                            valueColor = if (monthTotal < -0.004) LedgerCoral else LedgerTextPrimary,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    HorizontalDivider(color = LedgerDivider, thickness = 1.dp)
                 }
-                HorizontalDivider(color = LedgerDivider, thickness = 1.dp)
             }
 
             // Sub-tab Content
-            when (filter.subTab) {
-                TransactionsSubTab.DAILY -> {
-                    DailyTransactionsList(
-                        bundle = bundle,
-                        dayGroups = dayGroups,
-                        symbol = symbol,
-                        onEditTransaction = onEditTransaction,
-                        onAddTransaction = onAddTransaction
-                    )
-                }
-                TransactionsSubTab.CALENDAR -> {
-                    CalendarTransactionsView(
-                        bundle = bundle,
-                        filter = filter,
-                        monthTransactions = monthTransactions,
-                        symbol = symbol,
-                        onEditTransaction = onEditTransaction
-                    )
-                }
-                TransactionsSubTab.MONTHLY -> {
-                    MonthlySummaryList(
-                        bundle = bundle,
-                        year = filter.selectedYear,
-                        symbol = symbol,
-                        viewModel = viewModel,
-                        onSelectMonth = { monthZero ->
-                            viewModel.selectMonth(filter.selectedYear, monthZero)
-                            viewModel.setSubTab(TransactionsSubTab.DAILY)
-                        }
-                    )
-                }
-                TransactionsSubTab.TOTAL -> {
-                    TotalOverviewTab(
-                        bundle = bundle,
-                        monthTransactions = monthTransactions,
-                        monthIncome = monthIncome,
-                        monthExpense = monthExpense,
-                        symbol = symbol,
-                        onExportCsv = onExportCsv,
-                        onImportExcel = onImportExcel,
-                        onOpenBudgets = onOpenBudgets
-                    )
-                }
-                TransactionsSubTab.NOTE -> {
-                    NotesListTab(
-                        notes = bundle.notes,
-                        onAddNote = {
-                            editingNote = null
-                            showNoteDialog = true
-                        },
-                        onEditNote = { note ->
-                            editingNote = note
-                            showNoteDialog = true
-                        },
-                        onTogglePin = { note ->
-                            viewModel.saveNote(note.id, note.title, note.content, !note.pinned)
-                        },
-                        onDeleteNote = { note ->
-                            viewModel.deleteNote(note.id)
-                        }
-                    )
+            AnimatedContent(
+                targetState = filter.subTab,
+                transitionSpec = {
+                    val dir = if (targetState.ordinal >= initialState.ordinal) 1 else -1
+                    (slideInHorizontally(
+                        animationSpec = tween(180, easing = FastOutSlowInEasing),
+                        initialOffsetX = { dir * (it / 16) }
+                    ) + fadeIn(tween(160)))
+                        .togetherWith(
+                            slideOutHorizontally(
+                                animationSpec = tween(140, easing = FastOutSlowInEasing),
+                                targetOffsetX = { -dir * (it / 20) }
+                            ) + fadeOut(tween(120))
+                        )
+                },
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                label = "tx_subtab_content"
+            ) { currentSubTab ->
+                when (currentSubTab) {
+                    TransactionsSubTab.DAILY -> {
+                        DailyTransactionsList(
+                            bundle = bundle,
+                            dayGroups = dayGroups,
+                            symbol = symbol,
+                            onEditTransaction = onEditTransaction,
+                            onAddTransaction = onAddTransaction
+                        )
+                    }
+                    TransactionsSubTab.CALENDAR -> {
+                        CalendarTransactionsView(
+                            bundle = bundle,
+                            filter = filter,
+                            monthTransactions = monthTransactions,
+                            symbol = symbol,
+                            onEditTransaction = onEditTransaction
+                        )
+                    }
+                    TransactionsSubTab.MONTHLY -> {
+                        MonthlySummaryList(
+                            bundle = bundle,
+                            year = filter.selectedYear,
+                            symbol = symbol,
+                            viewModel = viewModel,
+                            onSelectMonth = { monthZero ->
+                                viewModel.selectMonth(filter.selectedYear, monthZero)
+                                viewModel.setSubTab(TransactionsSubTab.DAILY)
+                            }
+                        )
+                    }
+                    TransactionsSubTab.TOTAL -> {
+                        TotalOverviewTab(
+                            bundle = bundle,
+                            monthTransactions = monthTransactions,
+                            monthIncome = monthIncome,
+                            monthExpense = monthExpense,
+                            symbol = symbol,
+                            onExportCsv = onExportCsv,
+                            onImportExcel = onImportExcel,
+                            onOpenBudgets = onOpenBudgets
+                        )
+                    }
+                    TransactionsSubTab.NOTE -> {
+                        NotesListTab(
+                            notes = bundle.notes,
+                            onAddNote = {
+                                editingNote = null
+                                showNoteDialog = true
+                            },
+                            onEditNote = { note ->
+                                editingNote = note
+                                showNoteDialog = true
+                            },
+                            onTogglePin = { note ->
+                                viewModel.saveNote(note.id, note.title, note.content, !note.pinned)
+                            },
+                            onDeleteNote = { note ->
+                                viewModel.deleteNote(note.id)
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -444,20 +504,24 @@ fun SummaryMetricColumn(
     modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = modifier,
+        modifier = modifier.padding(horizontal = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = LedgerTextSecondary
+            style = MaterialTheme.typography.labelSmall,
+            color = LedgerTextSecondary,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis
         )
         Spacer(modifier = Modifier.height(2.dp))
         Text(
             text = value,
-            style = TabularAmountStyle.copy(fontSize = 14.sp),
+            style = TabularAmountStyle.copy(fontSize = 13.5.sp),
             color = valueColor,
             maxLines = 1,
+            softWrap = false,
             overflow = TextOverflow.Ellipsis
         )
     }
@@ -569,23 +633,33 @@ private fun DailyTransactionsList(
         }
 
         dayGroups.forEach { group ->
-            item(key = "header_${group.epochDay}") {
-                DayGroupHeader(group = group, symbol = symbol)
-            }
-            items(group.transactions, key = { it.id }) { tx ->
-                TransactionRowItem(
-                    tx = tx,
-                    bundle = bundle,
+            item(key = "header_${group.epochDay}", contentType = "day_header") {
+                DayGroupHeader(
+                    group = group,
                     symbol = symbol,
-                    onClick = { onEditTransaction(tx) }
+                    modifier = Modifier.animateItem()
                 )
-                HorizontalDivider(color = LedgerDivider.copy(alpha = 0.5f), thickness = 0.5.dp)
             }
-            item(key = "spacer_${group.epochDay}") {
+            items(
+                items = group.transactions,
+                key = { it.id },
+                contentType = { "tx_row" }
+            ) { tx ->
+                Column(modifier = Modifier.animateItem()) {
+                    TransactionRowItem(
+                        tx = tx,
+                        bundle = bundle,
+                        symbol = symbol,
+                        onClick = { onEditTransaction(tx) }
+                    )
+                    HorizontalDivider(color = LedgerDivider.copy(alpha = 0.5f), thickness = 0.5.dp)
+                }
+            }
+            item(key = "spacer_${group.epochDay}", contentType = "day_spacer") {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(8.dp)
+                        .height(6.dp)
                         .background(LedgerBackground)
                 )
             }
@@ -596,66 +670,79 @@ private fun DailyTransactionsList(
 @Composable
 private fun DayGroupHeader(
     group: DayTransactionGroup,
-    symbol: String
+    symbol: String,
+    modifier: Modifier = Modifier
 ) {
-    val dayNum = LedgerFormatters.dayOfMonthPadded(group.epochDay)
-    val weekday = LedgerFormatters.weekdayShort(group.epochDay)
-    val monthYear = LedgerFormatters.monthYearDot(group.epochDay)
-    val dow = LedgerFormatters.dayOfWeekIndex(group.epochDay)
+    val dayNum = remember(group.epochDay) { LedgerFormatters.dayOfMonthPadded(group.epochDay) }
+    val weekday = remember(group.epochDay) { LedgerFormatters.weekdayShort(group.epochDay) }
+    val monthYear = remember(group.epochDay) { LedgerFormatters.monthYearDot(group.epochDay) }
+    val dow = remember(group.epochDay) { LedgerFormatters.dayOfWeekIndex(group.epochDay) }
     val badgeBg = when (dow) {
         Calendar.SATURDAY -> LedgerBlue
         Calendar.SUNDAY -> LedgerCoral
         else -> LedgerSurfaceHighlight
     }
 
-    Column(modifier = Modifier.fillMaxWidth().background(LedgerSurface)) {
+    Column(modifier = modifier.fillMaxWidth().background(LedgerSurface)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 9.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = dayNum,
                 style = MaterialTheme.typography.titleLarge.copy(
                     fontWeight = FontWeight.Bold,
-                    fontSize = 20.sp
+                    fontSize = 18.sp
                 ),
-                color = LedgerTextPrimary
+                color = LedgerTextPrimary,
+                maxLines = 1,
+                softWrap = false
             )
             Spacer(modifier = Modifier.width(6.dp))
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(4.dp))
                     .background(badgeBg)
-                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                    .padding(horizontal = 5.dp, vertical = 2.dp)
             ) {
                 Text(
                     text = weekday,
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                     color = Color.White,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    softWrap = false
                 )
             }
             Spacer(modifier = Modifier.width(6.dp))
             Text(
                 text = monthYear,
-                style = MaterialTheme.typography.bodySmall,
-                color = LedgerTextMuted
+                style = MaterialTheme.typography.labelSmall,
+                color = LedgerTextMuted,
+                maxLines = 1,
+                softWrap = false
             )
 
-            Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.weight(1f).widthIn(min = 6.dp))
 
             Text(
                 text = LedgerFormatters.formatAmount(group.dayIncome, symbol),
-                style = TabularAmountStyle.copy(fontSize = 13.sp),
+                style = TabularAmountStyle.copy(fontSize = 12.5.sp),
                 color = LedgerBlue,
-                modifier = Modifier.padding(end = 14.dp)
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(end = 10.dp)
             )
             Text(
                 text = LedgerFormatters.formatAmount(group.dayExpense, symbol),
-                style = TabularAmountStyle.copy(fontSize = 13.sp),
-                color = LedgerCoral
+                style = TabularAmountStyle.copy(fontSize = 12.5.sp),
+                color = LedgerCoral,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis
             )
         }
         HorizontalDivider(color = LedgerDivider, thickness = 1.dp)
@@ -677,13 +764,15 @@ fun TransactionRowItem(
     }
     val leftSecondary = if (txType != TransactionType.TRANSFER) tx.subcategory else null
 
-    val accountRoute = when (txType) {
-        TransactionType.TRANSFER -> {
-            val from = bundle.accountName(tx.accountId)
-            val to = bundle.accountName(tx.toAccountId)
-            "$from → $to"
+    val accountRoute = remember(tx.id, txType, tx.accountId, tx.toAccountId, bundle.accounts) {
+        when (txType) {
+            TransactionType.TRANSFER -> {
+                val from = bundle.accountName(tx.accountId)
+                val to = bundle.accountName(tx.toAccountId)
+                "$from → $to"
+            }
+            else -> bundle.accountName(tx.accountId)
         }
-        else -> bundle.accountName(tx.accountId)
     }
 
     val amountColor = when (txType) {
@@ -692,102 +781,114 @@ fun TransactionRowItem(
         TransactionType.TRANSFER -> LedgerTextPrimary
     }
 
-    Row(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
             .background(LedgerSurface)
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 11.dp)
-            .testTag("tx_row_${tx.id}"),
-        verticalAlignment = Alignment.CenterVertically
+            .testTag("tx_row_${tx.id}")
     ) {
-        // Left Column: Category + Subcategory
-        Column(modifier = Modifier.width(96.dp).padding(end = 8.dp)) {
-            Text(
-                text = leftPrimary,
-                style = MaterialTheme.typography.bodySmall,
-                color = LedgerTextSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            if (!leftSecondary.isNullOrBlank()) {
+        val leftColWidth = (maxWidth * 0.25f).coerceIn(76.dp, 114.dp)
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 50.dp)
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Left Column: Category + Subcategory
+            Column(modifier = Modifier.width(leftColWidth).padding(end = 8.dp)) {
                 Text(
-                    text = leftSecondary,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = LedgerTextMuted,
+                    text = leftPrimary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = LedgerTextSecondary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-            }
-        }
-
-        // Middle Column: Note / Description + Account Route
-        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = tx.note.ifBlank { leftPrimary },
-                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                    color = LedgerTextPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-                if (tx.favorite) {
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Icon(
-                        imageVector = Icons.Filled.Star,
-                        contentDescription = "Favorite",
-                        tint = LedgerAmber,
-                        modifier = Modifier.size(13.dp)
+                if (!leftSecondary.isNullOrBlank()) {
+                    Text(
+                        text = leftSecondary,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = LedgerTextMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    text = accountRoute,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = LedgerTextMuted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-                val displayTagging = tx.effectiveTagging()
-                if (displayTagging != null) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(LedgerSurfaceHighlight)
-                            .padding(horizontal = 5.dp, vertical = 1.dp)
-                    ) {
-                        Text(
-                            text = displayTagging,
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                            color = LedgerTextSecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+
+            // Middle Column: Note / Description + Account Route
+            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = tx.note.ifBlank { leftPrimary },
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = LedgerTextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (tx.favorite) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            imageVector = Icons.Filled.Star,
+                            contentDescription = "Favorite",
+                            tint = LedgerAmber,
+                            modifier = Modifier.size(13.dp)
                         )
                     }
                 }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Text(
+                        text = accountRoute,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = LedgerTextMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    val displayTagging = tx.effectiveTagging()
+                    if (displayTagging != null) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(LedgerSurfaceHighlight)
+                                .padding(horizontal = 5.dp, vertical = 1.dp)
+                        ) {
+                            Text(
+                                text = displayTagging,
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                color = LedgerTextSecondary,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
             }
-        }
 
-        // Right Column: Amount
-        Column(horizontalAlignment = Alignment.End) {
-            Text(
-                text = LedgerFormatters.formatAmount(tx.amount, symbol),
-                style = TabularAmountStyle.copy(fontSize = 14.sp),
-                color = amountColor,
-                maxLines = 1
-            )
-            if (txType == TransactionType.TRANSFER && tx.feeAmount > 0.0) {
+            // Right Column: Amount
+            Column(horizontalAlignment = Alignment.End) {
                 Text(
-                    text = "Fee ${LedgerFormatters.formatAmount(tx.feeAmount, symbol)}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = LedgerTextMuted
+                    text = LedgerFormatters.formatAmount(tx.amount, symbol),
+                    style = TabularAmountStyle.copy(fontSize = 13.5.sp),
+                    color = amountColor,
+                    maxLines = 1,
+                    softWrap = false
                 )
+                if (txType == TransactionType.TRANSFER && tx.feeAmount > 0.0) {
+                    Text(
+                        text = "Fee ${LedgerFormatters.formatAmount(tx.feeAmount, symbol)}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = LedgerTextMuted,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
             }
         }
     }
@@ -801,11 +902,22 @@ private fun CalendarTransactionsView(
     symbol: String,
     onEditTransaction: (LedgerTransaction) -> Unit
 ) {
-    val daysCount = LedgerFormatters.daysInMonth(filter.selectedYear, filter.selectedMonth)
-    val firstDow = LedgerFormatters.firstDayOfWeekInMonth(filter.selectedYear, filter.selectedMonth) // 1=Sun..7=Sat
+    val daysCount = remember(filter.selectedYear, filter.selectedMonth) {
+        LedgerFormatters.daysInMonth(filter.selectedYear, filter.selectedMonth)
+    }
+    val firstDow = remember(filter.selectedYear, filter.selectedMonth) {
+        LedgerFormatters.firstDayOfWeekInMonth(filter.selectedYear, filter.selectedMonth)
+    }
     val leadingBlanks = firstDow - 1
 
     val byDay = remember(monthTransactions) { monthTransactions.groupBy { it.epochDay } }
+    val dayTotals = remember(byDay) {
+        byDay.mapValues { (_, list) ->
+            val inc = list.filter { it.txType() == TransactionType.INCOME }.sumOf { it.amount }
+            val exp = list.filter { it.txType() == TransactionType.EXPENSE }.sumOf { it.amount }
+            inc to exp
+        }
+    }
     var selectedDayOfMonth by remember(filter.selectedYear, filter.selectedMonth) {
         mutableStateOf<Int?>(null)
     }
@@ -814,140 +926,158 @@ private fun CalendarTransactionsView(
         LedgerFormatters.calendarToEpochDay(filter.selectedYear, filter.selectedMonth, it)
     }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 88.dp)
-    ) {
-        item {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(LedgerSurfaceElevated)
-                    .padding(vertical = 8.dp)
-            ) {
-                listOf("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat").forEachIndexed { i, name ->
-                    val colColor = when (i) {
-                        0 -> LedgerCoral
-                        6 -> LedgerBlue
-                        else -> LedgerTextSecondary
-                    }
-                    Text(
-                        text = name,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = colColor,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-        }
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val cellHeight = (maxWidth / 7f).coerceIn(50.dp, 68.dp)
 
-        val totalCells = leadingBlanks + daysCount
-        val rows = (totalCells + 6) / 7
-        items(rows) { rowIndex ->
-            Row(modifier = Modifier.fillMaxWidth().background(LedgerSurface)) {
-                for (col in 0..6) {
-                    val cellIdx = rowIndex * 7 + col
-                    val dayNum = cellIdx - leadingBlanks + 1
-                    if (dayNum in 1..daysCount) {
-                        val epochDay = LedgerFormatters.calendarToEpochDay(
-                            filter.selectedYear,
-                            filter.selectedMonth,
-                            dayNum
-                        )
-                        val txs = byDay[epochDay].orEmpty()
-                        val inc = txs.filter { it.txType() == TransactionType.INCOME }.sumOf { it.amount }
-                        val exp = txs.filter { it.txType() == TransactionType.EXPENSE }.sumOf { it.amount }
-                        val isSelected = selectedDayOfMonth == dayNum
-
-                        Column(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(64.dp)
-                                .border(
-                                    width = if (isSelected) 1.5.dp else 0.5.dp,
-                                    color = if (isSelected) LedgerCoral else LedgerDivider
-                                )
-                                .background(
-                                    if (isSelected) LedgerCoral.copy(alpha = 0.14f) else LedgerSurface
-                                )
-                                .clickable {
-                                    selectedDayOfMonth = if (isSelected) null else dayNum
-                                }
-                                .padding(4.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                text = dayNum.toString(),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = when (col) {
-                                    0 -> LedgerCoral
-                                    6 -> LedgerBlue
-                                    else -> LedgerTextPrimary
-                                },
-                                fontWeight = if (txs.isNotEmpty()) FontWeight.Bold else FontWeight.Normal
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            if (inc > 0.0) {
-                                Text(
-                                    text = LedgerFormatters.formatAmount(inc, symbol, false),
-                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
-                                    color = LedgerBlue,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Clip
-                                )
-                            }
-                            if (exp > 0.0) {
-                                Text(
-                                    text = LedgerFormatters.formatAmount(exp, symbol, false),
-                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
-                                    color = LedgerCoral,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Clip
-                                )
-                            }
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 88.dp)
+        ) {
+            item(key = "cal_weekdays", contentType = "cal_header") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(LedgerSurfaceElevated)
+                        .padding(vertical = 7.dp)
+                ) {
+                    listOf("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat").forEachIndexed { i, name ->
+                        val colColor = when (i) {
+                            0 -> LedgerCoral
+                            6 -> LedgerBlue
+                            else -> LedgerTextSecondary
                         }
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(64.dp)
-                                .border(0.5.dp, LedgerDivider)
-                                .background(LedgerBackground.copy(alpha = 0.6f))
+                        Text(
+                            text = name,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colColor,
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
             }
-        }
 
-        if (selectedEpochDay != null) {
-            val selectedTxs = byDay[selectedEpochDay].orEmpty()
-            item {
-                Text(
-                    text = LedgerFormatters.formatFullDateInput(selectedEpochDay),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = LedgerTextSecondary,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-                )
+            val totalCells = leadingBlanks + daysCount
+            val rows = (totalCells + 6) / 7
+            items(rows, key = { "cal_row_$it" }, contentType = { "cal_row" }) { rowIndex ->
+                Row(modifier = Modifier.fillMaxWidth().background(LedgerSurface)) {
+                    for (col in 0..6) {
+                        val cellIdx = rowIndex * 7 + col
+                        val dayNum = cellIdx - leadingBlanks + 1
+                        if (dayNum in 1..daysCount) {
+                            val epochDay = LedgerFormatters.calendarToEpochDay(
+                                filter.selectedYear,
+                                filter.selectedMonth,
+                                dayNum
+                            )
+                            val totals = dayTotals[epochDay]
+                            val inc = totals?.first ?: 0.0
+                            val exp = totals?.second ?: 0.0
+                            val hasEntries = totals != null
+                            val isSelected = selectedDayOfMonth == dayNum
+                            val cellBg by animateColorAsState(
+                                targetValue = if (isSelected) LedgerCoral.copy(alpha = 0.16f) else LedgerSurface,
+                                animationSpec = tween(150),
+                                label = "cal_cell_$dayNum"
+                            )
+
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(cellHeight)
+                                    .border(
+                                        width = if (isSelected) 1.5.dp else 0.5.dp,
+                                        color = if (isSelected) LedgerCoral else LedgerDivider
+                                    )
+                                    .background(cellBg)
+                                    .clickable {
+                                        selectedDayOfMonth = if (isSelected) null else dayNum
+                                    }
+                                    .padding(horizontal = 2.dp, vertical = 3.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = dayNum.toString(),
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                    color = when (col) {
+                                        0 -> LedgerCoral
+                                        6 -> LedgerBlue
+                                        else -> LedgerTextPrimary
+                                    },
+                                    fontWeight = if (hasEntries) FontWeight.Bold else FontWeight.Normal,
+                                    maxLines = 1
+                                )
+                                Spacer(modifier = Modifier.height(1.dp))
+                                if (inc > 0.0) {
+                                    Text(
+                                        text = LedgerFormatters.formatWholeAmount(inc, symbol, false),
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.5.sp),
+                                        color = LedgerBlue,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Clip
+                                    )
+                                }
+                                if (exp > 0.0) {
+                                    Text(
+                                        text = LedgerFormatters.formatWholeAmount(exp, symbol, false),
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.5.sp),
+                                        color = LedgerCoral,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Clip
+                                    )
+                                }
+                            }
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(cellHeight)
+                                    .border(0.5.dp, LedgerDivider)
+                                    .background(LedgerBackground.copy(alpha = 0.6f))
+                            )
+                        }
+                    }
+                }
             }
-            if (selectedTxs.isEmpty()) {
-                item {
+
+            if (selectedEpochDay != null) {
+                val selectedTxs = byDay[selectedEpochDay].orEmpty()
+                item(key = "selected_day_hdr_$selectedEpochDay") {
                     Text(
-                        text = "No entries on this day.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = LedgerTextMuted,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        text = LedgerFormatters.formatFullDateInput(selectedEpochDay),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = LedgerTextSecondary,
+                        modifier = Modifier
+                            .animateItem()
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
                     )
                 }
-            } else {
-                items(selectedTxs, key = { it.id }) { tx ->
-                    TransactionRowItem(
-                        tx = tx,
-                        bundle = bundle,
-                        symbol = symbol,
-                        onClick = { onEditTransaction(tx) }
-                    )
-                    HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                if (selectedTxs.isEmpty()) {
+                    item(key = "selected_day_empty_$selectedEpochDay") {
+                        Text(
+                            text = "No entries on this day.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = LedgerTextMuted,
+                            modifier = Modifier
+                                .animateItem()
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                        )
+                    }
+                } else {
+                    items(selectedTxs, key = { it.id }, contentType = { "tx_row" }) { tx ->
+                        Column(modifier = Modifier.animateItem()) {
+                            TransactionRowItem(
+                                tx = tx,
+                                bundle = bundle,
+                                symbol = symbol,
+                                onClick = { onEditTransaction(tx) }
+                            )
+                            HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                        }
+                    }
                 }
             }
         }
@@ -970,40 +1100,53 @@ private fun MonthlySummaryList(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 88.dp)
     ) {
-        items(rows, key = { it.monthZeroBased }) { row ->
+        items(rows, key = { it.monthZeroBased }, contentType = { "monthly_row" }) { row ->
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .heightIn(min = 48.dp)
                     .background(LedgerSurface)
                     .clickable { onSelectMonth(row.monthZeroBased) }
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     text = row.monthLabel,
                     style = MaterialTheme.typography.titleSmall,
                     color = LedgerTextPrimary,
-                    modifier = Modifier.width(92.dp)
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(0.85f)
                 )
                 Text(
-                    text = LedgerFormatters.formatAmount(row.income, symbol),
-                    style = TabularAmountStyle.copy(fontSize = 13.sp),
+                    text = LedgerFormatters.formatWholeAmount(row.income, symbol),
+                    style = TabularAmountStyle.copy(fontSize = 12.5.sp),
                     color = LedgerBlue,
                     textAlign = TextAlign.End,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
                 Text(
-                    text = LedgerFormatters.formatAmount(row.expense, symbol),
-                    style = TabularAmountStyle.copy(fontSize = 13.sp),
+                    text = LedgerFormatters.formatWholeAmount(row.expense, symbol),
+                    style = TabularAmountStyle.copy(fontSize = 12.5.sp),
                     color = LedgerCoral,
                     textAlign = TextAlign.End,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
                 Text(
-                    text = LedgerFormatters.formatAmount(row.net, symbol),
-                    style = TabularAmountStyle.copy(fontSize = 13.sp),
-                    color = LedgerTextPrimary,
+                    text = LedgerFormatters.formatSignedWhole(row.net, symbol),
+                    style = TabularAmountStyle.copy(fontSize = 12.5.sp),
+                    color = if (row.net <= -0.5) LedgerCoral else LedgerTextPrimary,
                     textAlign = TextAlign.End,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -1034,18 +1177,19 @@ private fun TotalOverviewTab(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        contentPadding = PaddingValues(14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         // Budget Summary Card
-        item {
+        item(key = "total_budgets") {
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = LedgerSurface,
                 border = androidx.compose.foundation.BorderStroke(1.dp, LedgerDivider),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().widthIn(max = 680.dp)
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(14.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1056,90 +1200,118 @@ private fun TotalOverviewTab(
                             Text("Manage", color = LedgerCoral)
                         }
                     }
-                    if (bundle.budgets.isEmpty()) {
-                        Text(
-                            text = "Set monthly spending targets per category to monitor budget pacing.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = LedgerTextSecondary
-                        )
-                    } else {
-                        bundle.budgets.forEach { budget ->
-                            val cat = bundle.categoryById(budget.categoryId)
-                            val spent = expenseByCat[budget.categoryId] ?: 0.0
-                            val progress = if (budget.monthlyLimit > 0.0) (spent / budget.monthlyLimit).toFloat().coerceIn(0f, 1f) else 0f
-                            Spacer(modifier = Modifier.height(10.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(cat?.name ?: "Category", style = MaterialTheme.typography.bodyMedium, color = LedgerTextPrimary)
-                                Text(
-                                    text = "${LedgerFormatters.formatAmount(spent, symbol)} / ${LedgerFormatters.formatAmount(budget.monthlyLimit, symbol)}",
-                                    style = TabularAmountStyle.copy(fontSize = 12.sp),
-                                    color = if (spent > budget.monthlyLimit) LedgerCoral else LedgerTextSecondary
+                        val activeBudgets = bundle.budgets.filter { it.monthlyLimit > 0.0 }
+                        if (activeBudgets.isEmpty()) {
+                            Text(
+                                text = "Set monthly spending targets per category to monitor budget pacing.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = LedgerTextSecondary
+                            )
+                        } else {
+                            activeBudgets.forEach { budget ->
+                                val cat = bundle.categoryById(budget.categoryId)
+                                val spent = expenseByCat[budget.categoryId] ?: 0.0
+                                val rawRatio = if (budget.monthlyLimit > 0.0) (spent / budget.monthlyLimit).toFloat() else 0f
+                                val isOver = spent > budget.monthlyLimit + 0.004
+                                val pctInt = (rawRatio * 100f).toInt()
+                                val barColor = budgetStatusColor(rawRatio, isOver)
+                                val animatedProgress by animateFloatAsState(
+                                    targetValue = rawRatio.coerceIn(0f, 1f),
+                                    animationSpec = tween(320, easing = FastOutSlowInEasing),
+                                    label = "budget_progress_${budget.id}"
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = cat?.name ?: "Category",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        color = LedgerTextPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f).padding(end = 8.dp)
+                                    )
+                                    Text(
+                                        text = "$pctInt% • ${LedgerFormatters.formatWholeAmount(spent, symbol)} / ${LedgerFormatters.formatWholeAmount(budget.monthlyLimit, symbol)}",
+                                        style = TabularAmountStyle.copy(fontSize = 12.sp),
+                                        color = if (isOver) LedgerCoral else LedgerTextSecondary,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+                                LinearProgressIndicator(
+                                    progress = { animatedProgress },
+                                    color = barColor,
+                                    trackColor = LedgerSurfaceHighlight,
+                                    modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(4.dp))
                                 )
                             }
-                            Spacer(modifier = Modifier.height(6.dp))
-                            LinearProgressIndicator(
-                                progress = { progress },
-                                color = if (spent > budget.monthlyLimit) LedgerCoral else LedgerBlue,
-                                trackColor = LedgerSurfaceHighlight,
-                                modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(4.dp))
-                            )
                         }
-                    }
                 }
             }
         }
 
         // Period Cash Flow Breakdown
-        item {
+        item(key = "total_period_summary") {
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = LedgerSurface,
                 border = androidx.compose.foundation.BorderStroke(1.dp, LedgerDivider),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().widthIn(max = 680.dp)
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     Text("Period Summary", style = MaterialTheme.typography.titleMedium, color = LedgerTextPrimary)
                     TotalKeyValueRow("Total Entries", "${monthTransactions.size}", LedgerTextPrimary)
                     TotalKeyValueRow("Total Income", LedgerFormatters.formatAmount(monthIncome, symbol), LedgerBlue)
                     TotalKeyValueRow("Total Expenses", LedgerFormatters.formatAmount(monthExpense, symbol), LedgerCoral)
                     TotalKeyValueRow("Internal Transfers", LedgerFormatters.formatAmount(transferTotal, symbol), LedgerTextPrimary)
                     HorizontalDivider(color = LedgerDivider)
-                    TotalKeyValueRow("Net Savings", LedgerFormatters.formatAmount(monthIncome - monthExpense, symbol), LedgerTextPrimary)
+                    val netSavings = monthIncome - monthExpense
+                    TotalKeyValueRow(
+                        label = "Net Savings",
+                        value = LedgerFormatters.formatAmount(netSavings, symbol),
+                        color = if (netSavings < -0.004) LedgerCoral else LedgerTextPrimary
+                    )
                 }
             }
         }
 
         // Export & Import Excel Actions
-        item {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        item(key = "total_excel_actions") {
+            Column(
+                modifier = Modifier.fillMaxWidth().widthIn(max = 680.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 Button(
                     onClick = onExportCsv,
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = LedgerSurfaceElevated, contentColor = LedgerTextPrimary),
-                    modifier = Modifier.fillMaxWidth().height(50.dp).testTag("total_export_csv_button")
+                    modifier = Modifier.fillMaxWidth().height(48.dp).testTag("total_export_csv_button")
                 ) {
                     Icon(Icons.Filled.Share, contentDescription = null, tint = LedgerCoral, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Export Ledger to Excel (.xlsx)")
+                    Text("Export Ledger to Excel (.xlsx)", maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 OutlinedButton(
                     onClick = onImportExcel,
                     shape = RoundedCornerShape(12.dp),
                     border = androidx.compose.foundation.BorderStroke(1.dp, LedgerBlue.copy(alpha = 0.65f)),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = LedgerBlue),
-                    modifier = Modifier.fillMaxWidth().height(50.dp).testTag("total_import_excel_button")
+                    modifier = Modifier.fillMaxWidth().height(48.dp).testTag("total_import_excel_button")
                 ) {
                     Icon(Icons.Filled.FileUpload, contentDescription = null, tint = LedgerBlue, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Import from Excel (.xlsx)")
+                    Text("Import from Excel (.xlsx)", maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
 
-        item { Spacer(modifier = Modifier.height(72.dp)) }
+        item(key = "total_bottom_spacer") { Spacer(modifier = Modifier.height(72.dp)) }
     }
 }
 
@@ -1189,9 +1361,10 @@ private fun NotesListTab(
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        items(notes, key = { it.id }) { note ->
+        items(notes, key = { it.id }, contentType = { "note_card" }) { note ->
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = LedgerSurface,
@@ -1199,7 +1372,11 @@ private fun NotesListTab(
                     1.dp,
                     if (note.pinned) LedgerCoral.copy(alpha = 0.5f) else LedgerDivider
                 ),
-                modifier = Modifier.fillMaxWidth().clickable { onEditNote(note) }
+                modifier = Modifier
+                    .animateItem()
+                    .fillMaxWidth()
+                    .widthIn(max = 680.dp)
+                    .clickable { onEditNote(note) }
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Row(

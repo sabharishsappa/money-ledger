@@ -1,12 +1,23 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -16,12 +27,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -36,11 +49,14 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.filled.Today
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -58,6 +74,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,13 +85,23 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import com.example.data.Category
 import com.example.data.CategoryType
 import com.example.data.LedgerTransaction
@@ -93,6 +120,7 @@ import com.example.ui.theme.LedgerTextMuted
 import com.example.ui.theme.LedgerTextPrimary
 import com.example.ui.theme.LedgerTextSecondary
 import com.example.ui.theme.TabularAmountStyle
+import com.example.util.IndianNumberVisualTransformation
 import com.example.util.LedgerFormatters
 import com.example.viewmodel.LedgerDataBundle
 import kotlin.math.roundToLong
@@ -104,6 +132,7 @@ private enum class ActivePicker {
     CATEGORY
 }
 
+@Immutable
 private data class AccountSuggestionItem(
     val accountId: String,
     val accountName: String,
@@ -111,6 +140,7 @@ private data class AccountSuggestionItem(
     val balance: Double
 )
 
+@Immutable
 private data class CategorySuggestionItem(
     val categoryId: String,
     val categoryName: String,
@@ -119,11 +149,19 @@ private data class CategorySuggestionItem(
     val displayLabel: String
 )
 
+@Immutable
+private data class TextSuggestionItem(
+    val text: String,
+    val usageCount: Int
+)
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun AddEditTransactionScreen(
     bundle: LedgerDataBundle,
     existing: LedgerTransaction?,
+    draft: LedgerTransaction? = null,
+    draftKey: Long = 0L,
     prefillType: TransactionType? = null,
     prefillCategoryId: String? = null,
     prefillSubcategory: String? = null,
@@ -135,100 +173,140 @@ fun AddEditTransactionScreen(
     onManageCategories: (CategoryType) -> Unit,
     onCreateCategoryLedger: ((categoryId: String, ledgerName: String, onCreated: (String, String) -> Unit) -> Unit)? = null
 ) {
-    BackHandler { onBack() }
-
     val focusManager = LocalFocusManager.current
     val symbol = bundle.settings.mainCurrencySymbol
+    val seedTx = existing ?: draft
+    val isDraftCopy = existing == null && draft != null
 
-    var txType by remember(existing, prefillType) {
-        mutableStateOf(existing?.txType() ?: prefillType ?: TransactionType.EXPENSE)
+    var txType by remember(existing, draft, draftKey, prefillType) {
+        mutableStateOf(seedTx?.txType() ?: prefillType ?: TransactionType.EXPENSE)
     }
-    var epochDay by remember(existing) {
-        mutableStateOf(existing?.epochDay ?: LedgerFormatters.todayEpochDay())
+    var epochDay by remember(existing, draft, draftKey) {
+        mutableStateOf(seedTx?.epochDay ?: LedgerFormatters.todayEpochDay())
     }
-    var accountId by remember(existing) {
-        mutableStateOf(existing?.accountId.orEmpty())
+    var accountId by remember(existing, draft, draftKey) {
+        mutableStateOf(seedTx?.accountId.orEmpty())
     }
-    var toAccountId by remember(existing) {
-        mutableStateOf(existing?.toAccountId.orEmpty())
+    var toAccountId by remember(existing, draft, draftKey) {
+        mutableStateOf(seedTx?.toAccountId.orEmpty())
     }
-    var categoryId by remember(existing, prefillCategoryId) {
-        mutableStateOf(existing?.categoryId ?: prefillCategoryId.orEmpty())
+    var categoryId by remember(existing, draft, draftKey, prefillCategoryId) {
+        mutableStateOf(seedTx?.categoryId ?: prefillCategoryId.orEmpty())
     }
-    var subcategory by remember(existing, prefillSubcategory) {
-        mutableStateOf(existing?.subcategory ?: prefillSubcategory.orEmpty())
+    var subcategory by remember(existing, draft, draftKey, prefillSubcategory) {
+        mutableStateOf(seedTx?.subcategory ?: prefillSubcategory.orEmpty())
     }
 
     // Type-ahead input queries synced with selected account / category
-    var accountQuery by remember(existing) {
-        val initialAccId = existing?.accountId.orEmpty()
+    var accountQuery by remember(existing, draft, draftKey) {
+        val initialAccId = seedTx?.accountId.orEmpty()
         mutableStateOf(if (initialAccId.isNotBlank()) bundle.accountName(initialAccId) else "")
     }
-    var toAccountQuery by remember(existing) {
-        val initialToId = existing?.toAccountId.orEmpty()
+    var toAccountQuery by remember(existing, draft, draftKey) {
+        val initialToId = seedTx?.toAccountId.orEmpty()
         mutableStateOf(if (initialToId.isNotBlank()) bundle.accountName(initialToId) else "")
     }
-    var categoryQuery by remember(existing, prefillCategoryId, prefillSubcategory) {
-        val initialCatId = existing?.categoryId ?: prefillCategoryId.orEmpty()
-        val initialSub = existing?.subcategory ?: prefillSubcategory.orEmpty()
+    var categoryQuery by remember(existing, draft, draftKey, prefillCategoryId, prefillSubcategory) {
+        val initialCatId = seedTx?.categoryId ?: prefillCategoryId.orEmpty()
+        val initialSub = seedTx?.subcategory ?: prefillSubcategory.orEmpty()
         val catName = bundle.categoryById(initialCatId)?.name.orEmpty()
         val label = when {
             catName.isBlank() -> ""
-            initialSub.isNotBlank() && (bundle.settings.subcategoryEnabled || !prefillSubcategory.isNullOrBlank()) -> "$catName / $initialSub"
+            initialSub.isNotBlank() && (bundle.settings.subcategoryEnabled || !prefillSubcategory.isNullOrBlank() || isDraftCopy) -> "$catName / $initialSub"
             else -> catName
         }
         mutableStateOf(label)
     }
 
-    var accountFieldFocused by remember { mutableStateOf(false) }
-    var toAccountFieldFocused by remember { mutableStateOf(false) }
-    var categoryFieldFocused by remember { mutableStateOf(false) }
-    var showAccountSuggestions by remember { mutableStateOf(false) }
-    var showToAccountSuggestions by remember { mutableStateOf(false) }
-    var showCategorySuggestions by remember { mutableStateOf(false) }
-    var hasTypedAccountQuery by remember { mutableStateOf(false) }
-    var hasTypedToAccountQuery by remember { mutableStateOf(false) }
-    var hasTypedCategoryQuery by remember { mutableStateOf(false) }
+    var accountFieldFocused by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var toAccountFieldFocused by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var categoryFieldFocused by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var noteFieldFocused by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var taggingFieldFocused by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var showAccountSuggestions by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var showToAccountSuggestions by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var showCategorySuggestions by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var showNoteSuggestions by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var showTaggingSuggestions by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var hasTypedAccountQuery by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var hasTypedToAccountQuery by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var hasTypedCategoryQuery by remember(existing, draft, draftKey) { mutableStateOf(false) }
 
-    var amountText by remember(existing) {
-        mutableStateOf(if (existing != null) existing.amount.toString() else "")
+    var amountText by remember(existing, draft, draftKey) {
+        val initial = seedTx?.amount?.let { amt ->
+            if (amt % 1.0 == 0.0) amt.toLong().toString() else amt.toString()
+        }.orEmpty()
+        mutableStateOf(initial)
     }
-    var showFeeField by remember(existing) {
-        mutableStateOf((existing?.feeAmount ?: 0.0) > 0.0)
+    var showFeeField by remember(existing, draft, draftKey) {
+        mutableStateOf((seedTx?.feeAmount ?: 0.0) > 0.0)
     }
-    var feeText by remember(existing) {
-        mutableStateOf(if ((existing?.feeAmount ?: 0.0) > 0.0) existing!!.feeAmount.toString() else "")
+    var feeText by remember(existing, draft, draftKey) {
+        val initialFee = seedTx?.feeAmount?.takeIf { it > 0.0 }?.let { fee ->
+            if (fee % 1.0 == 0.0) fee.toLong().toString() else fee.toString()
+        }.orEmpty()
+        mutableStateOf(initialFee)
     }
-    var noteText by remember(existing) { mutableStateOf(existing?.note.orEmpty()) }
-    var taggingText by remember(existing) { mutableStateOf(existing?.effectiveTagging().orEmpty()) }
-    var descriptionText by remember(existing) { mutableStateOf(existing?.description.orEmpty()) }
-    var favorite by remember(existing) { mutableStateOf(existing?.favorite ?: false) }
-    var repeatFreq by remember(existing) { mutableStateOf(existing?.repeat() ?: RepeatFrequency.NONE) }
-    var repeatDayOfMonth by remember(existing) {
-        val defaultDay = existing?.repeatDayOfMonth()
-            ?: LedgerFormatters.epochDayToCalendar(existing?.epochDay ?: LedgerFormatters.todayEpochDay())
+    var noteText by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.note.orEmpty()) }
+    var taggingText by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.effectiveTagging().orEmpty()) }
+    var descriptionText by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.description.orEmpty()) }
+    var favorite by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.favorite ?: false) }
+    var repeatFreq by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.repeat() ?: RepeatFrequency.NONE) }
+    var repeatDayOfMonth by remember(existing, draft, draftKey) {
+        val defaultDay = seedTx?.repeatDayOfMonth()
+            ?: LedgerFormatters.epochDayToCalendar(seedTx?.epochDay ?: LedgerFormatters.todayEpochDay())
                 .get(java.util.Calendar.DAY_OF_MONTH)
         mutableStateOf(defaultDay.coerceIn(1, 31))
     }
 
-    var activePicker by remember { mutableStateOf(ActivePicker.NONE) }
-    var expandedGroupId by remember { mutableStateOf<String?>(null) }
-    var expandedCategoryId by remember { mutableStateOf<String?>(null) }
+    var activePicker by remember(existing, draft, draftKey) { mutableStateOf(ActivePicker.NONE) }
+    var lastVisiblePicker by remember(existing, draft, draftKey) { mutableStateOf(ActivePicker.ACCOUNT) }
+    if (activePicker != ActivePicker.NONE) {
+        lastVisiblePicker = activePicker
+    }
+    val anySuggestionsOpen = showAccountSuggestions ||
+        showToAccountSuggestions ||
+        showCategorySuggestions ||
+        showNoteSuggestions ||
+        showTaggingSuggestions
+    BackHandler {
+        when {
+            anySuggestionsOpen -> {
+                showAccountSuggestions = false
+                showToAccountSuggestions = false
+                showCategorySuggestions = false
+                showNoteSuggestions = false
+                showTaggingSuggestions = false
+            }
+            activePicker != ActivePicker.NONE -> {
+                activePicker = ActivePicker.NONE
+            }
+            else -> onBack()
+        }
+    }
+    var expandedGroupId by remember(existing, draft, draftKey) { mutableStateOf<String?>(null) }
+    var expandedCategoryId by remember(existing, draft, draftKey) { mutableStateOf<String?>(null) }
 
-    var showDatePicker by remember { mutableStateOf(false) }
-    var showCopyDatePicker by remember { mutableStateOf(false) }
-    var showRepeatDialog by remember { mutableStateOf(false) }
-    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
-    var showCreateLedgerDialog by remember { mutableStateOf(false) }
-    var draftLedgerNameForDialog by remember { mutableStateOf("") }
-    var draftCategoryIdForDialog by remember { mutableStateOf<String?>(null) }
-    var validationError by remember { mutableStateOf<String?>(null) }
+    var showDatePicker by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var showCopyOptionsDialog by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var showCopyDatePicker by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var showRepeatDialog by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var showDeleteConfirmDialog by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var showCreateLedgerDialog by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var draftLedgerNameForDialog by remember(existing, draft, draftKey) { mutableStateOf("") }
+    var draftCategoryIdForDialog by remember(existing, draft, draftKey) { mutableStateOf<String?>(null) }
+    var validationError by remember(existing, draft, draftKey) { mutableStateOf<String?>(null) }
 
-    val accentColor = when (txType) {
+    val targetAccentColor = when (txType) {
         TransactionType.INCOME -> LedgerBlue
         TransactionType.EXPENSE -> LedgerCoral
         TransactionType.TRANSFER -> LedgerTextPrimary
     }
+    val accentColor by animateColorAsState(
+        targetValue = targetAccentColor,
+        animationSpec = tween(200),
+        label = "tx_accent_color"
+    )
 
     val saveButtonTextColor = when (txType) {
         TransactionType.TRANSFER -> LedgerBackground
@@ -316,6 +394,77 @@ fun AddEditTransactionScreen(
         return (starts + contains).take(6)
     }
 
+    val allNoteSuggestions = remember(bundle.transactions) {
+        val counts = mutableMapOf<String, Int>()
+        val latestLabel = mutableMapOf<String, String>()
+        val latestOrder = mutableMapOf<String, Long>()
+        bundle.transactions.forEach { tx ->
+            val clean = tx.note.trim()
+            if (clean.isNotEmpty()) {
+                val key = clean.lowercase()
+                counts[key] = (counts[key] ?: 0) + 1
+                val recency = tx.epochDay * 1_000_000L + (tx.timestampMillis % 1_000_000L)
+                if (recency >= (latestOrder[key] ?: Long.MIN_VALUE)) {
+                    latestOrder[key] = recency
+                    latestLabel[key] = clean
+                }
+            }
+        }
+        counts.entries
+            .sortedWith(
+                compareByDescending<Map.Entry<String, Int>> { it.value }
+                    .thenByDescending { latestOrder[it.key] ?: 0L }
+            )
+            .map { (key, count) ->
+                TextSuggestionItem(
+                    text = latestLabel[key] ?: key,
+                    usageCount = count
+                )
+            }
+    }
+
+    val allTaggingSuggestions = remember(bundle.transactions) {
+        val counts = mutableMapOf<String, Int>()
+        val latestLabel = mutableMapOf<String, String>()
+        val latestOrder = mutableMapOf<String, Long>()
+        bundle.transactions.forEach { tx ->
+            val clean = tx.effectiveTagging()?.trim().orEmpty()
+            if (clean.isNotEmpty()) {
+                val key = clean.lowercase()
+                counts[key] = (counts[key] ?: 0) + 1
+                val recency = tx.epochDay * 1_000_000L + (tx.timestampMillis % 1_000_000L)
+                if (recency >= (latestOrder[key] ?: Long.MIN_VALUE)) {
+                    latestOrder[key] = recency
+                    latestLabel[key] = clean
+                }
+            }
+        }
+        counts.entries
+            .sortedWith(
+                compareByDescending<Map.Entry<String, Int>> { it.value }
+                    .thenByDescending { latestOrder[it.key] ?: 0L }
+            )
+            .map { (key, count) ->
+                TextSuggestionItem(
+                    text = latestLabel[key] ?: key,
+                    usageCount = count
+                )
+            }
+    }
+
+    fun filterTextSuggestions(
+        allItems: List<TextSuggestionItem>,
+        query: String
+    ): List<TextSuggestionItem> {
+        val q = query.trim()
+        if (q.isEmpty()) return emptyList()
+        val starts = allItems.filter { it.text.startsWith(q, ignoreCase = true) }
+        val contains = allItems.filter { item ->
+            item !in starts && item.text.contains(q, ignoreCase = true)
+        }
+        return (starts + contains).take(6)
+    }
+
     fun formatCategoryLabel(catId: String, sub: String): String {
         val name = bundle.categoryById(catId)?.name.orEmpty()
         return when {
@@ -330,6 +479,8 @@ fun AddEditTransactionScreen(
         showAccountSuggestions = false
         showToAccountSuggestions = false
         showCategorySuggestions = false
+        showNoteSuggestions = false
+        showTaggingSuggestions = false
         activePicker = if (activePicker == picker) ActivePicker.NONE else picker
     }
 
@@ -454,25 +605,46 @@ fun AddEditTransactionScreen(
 
     fun startCopyFlow() {
         if (buildValidatedTransaction(clearId = true) != null) {
+            focusManager.clearFocus()
             activePicker = ActivePicker.NONE
-            showCopyDatePicker = true
+            showCopyOptionsDialog = true
         }
     }
 
-    Column(
+    fun openCopiedDraft(targetEpochDay: Long) {
+        val copiedModel = buildValidatedTransaction(
+            targetEpochDay = targetEpochDay,
+            clearId = true
+        ) ?: return
+        showCopyOptionsDialog = false
+        showCopyDatePicker = false
+        onCopy?.invoke(copiedModel)
+    }
+
+    val suggestionEnter = remember { expandVertically(tween(160)) + fadeIn(tween(140)) }
+    val suggestionExit = remember { shrinkVertically(tween(140)) + fadeOut(tween(110)) }
+
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(LedgerBackground)
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .imePadding()
     ) {
+        val labelWidth = if (maxWidth < 380.dp) 68.dp else 76.dp
+        val pickerHeight = (maxHeight * 0.36f).coerceIn(200.dp, 290.dp)
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .imePadding()
+        ) {
         // Top App Bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(LedgerSurface)
-                .padding(horizontal = 4.dp, vertical = 6.dp),
+                .padding(horizontal = 4.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onBack, modifier = Modifier.testTag("tx_editor_back_button")) {
@@ -482,49 +654,53 @@ fun AddEditTransactionScreen(
                     tint = LedgerTextPrimary
                 )
             }
-            Text(
-                text = when (txType) {
-                    TransactionType.INCOME -> "Income"
-                    TransactionType.EXPENSE -> "Expense"
-                    TransactionType.TRANSFER -> "Transfer"
-                },
-                style = MaterialTheme.typography.titleLarge,
-                color = LedgerTextPrimary,
-                modifier = Modifier.weight(1f).padding(start = 4.dp)
-            )
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = when (txType) {
+                        TransactionType.INCOME -> "Income"
+                        TransactionType.EXPENSE -> "Expense"
+                        TransactionType.TRANSFER -> "Transfer"
+                    },
+                    style = MaterialTheme.typography.titleLarge,
+                    color = LedgerTextPrimary,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (isDraftCopy) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = LedgerAmber.copy(alpha = 0.16f),
+                        border = BorderStroke(1.dp, LedgerAmber.copy(alpha = 0.55f)),
+                        modifier = Modifier.testTag("tx_draft_badge")
+                    ) {
+                        Text(
+                            text = "Draft",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = LedgerAmber,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
             IconButton(
                 onClick = { favorite = !favorite },
                 modifier = Modifier.testTag("tx_editor_favorite_button")
             ) {
                 Icon(
                     imageVector = if (favorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
-                    contentDescription = "Toggle favorite",
+                    contentDescription = "Toggle bookmark",
                     tint = if (favorite) LedgerAmber else LedgerTextSecondary
                 )
-            }
-            if (existing != null && onCopy != null) {
-                IconButton(
-                    onClick = { startCopyFlow() },
-                    modifier = Modifier.testTag("tx_editor_copy_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.ContentCopy,
-                        contentDescription = "Copy entry",
-                        tint = LedgerTextPrimary
-                    )
-                }
-            }
-            if (existing != null && onDelete != null) {
-                IconButton(
-                    onClick = { showDeleteConfirmDialog = true },
-                    modifier = Modifier.testTag("tx_editor_delete_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.DeleteOutline,
-                        contentDescription = "Delete transaction",
-                        tint = LedgerCoral
-                    )
-                }
             }
         }
 
@@ -532,9 +708,48 @@ fun AddEditTransactionScreen(
         Column(
             modifier = Modifier
                 .weight(1f)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 640.dp)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+            ) {
+            if (isDraftCopy) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = LedgerAmber.copy(alpha = 0.10f),
+                    border = BorderStroke(1.dp, LedgerAmber.copy(alpha = 0.35f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 10.dp)
+                        .testTag("tx_draft_banner")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.ContentCopy,
+                            contentDescription = null,
+                            tint = LedgerAmber,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "Draft copy — review details and tap Save to add entry.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = LedgerTextPrimary,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
             // 3-Segment Type Switcher (Income | Expense | Transfer)
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -542,18 +757,33 @@ fun AddEditTransactionScreen(
             ) {
                 TransactionType.entries.forEach { option ->
                     val isSelected = txType == option
-                    val borderColor = when {
+                    val targetBorder = when {
                         !isSelected -> LedgerBorder
                         option == TransactionType.INCOME -> LedgerBlue
                         option == TransactionType.EXPENSE -> LedgerCoral
                         else -> LedgerTextPrimary
                     }
-                    val textColor = when {
+                    val targetText = when {
                         !isSelected -> LedgerTextSecondary
                         option == TransactionType.INCOME -> LedgerBlue
                         option == TransactionType.EXPENSE -> LedgerCoral
                         else -> LedgerTextPrimary
                     }
+                    val borderColor by animateColorAsState(
+                        targetValue = targetBorder,
+                        animationSpec = tween(180),
+                        label = "seg_border_${option.name}"
+                    )
+                    val textColor by animateColorAsState(
+                        targetValue = targetText,
+                        animationSpec = tween(180),
+                        label = "seg_text_${option.name}"
+                    )
+                    val containerColor by animateColorAsState(
+                        targetValue = if (isSelected) LedgerSurfaceElevated else LedgerSurface,
+                        animationSpec = tween(180),
+                        label = "seg_bg_${option.name}"
+                    )
                     val label = when (option) {
                         TransactionType.INCOME -> "Income"
                         TransactionType.EXPENSE -> "Expense"
@@ -561,11 +791,11 @@ fun AddEditTransactionScreen(
                     }
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = if (isSelected) LedgerSurfaceElevated else LedgerSurface,
+                        color = containerColor,
                         border = BorderStroke(if (isSelected) 1.5.dp else 1.dp, borderColor),
                         modifier = Modifier
                             .weight(1f)
-                            .height(40.dp)
+                            .height(42.dp)
                             .clickable {
                                 txType = option
                                 showAccountSuggestions = false
@@ -589,18 +819,22 @@ fun AddEditTransactionScreen(
                                 text = label,
                                 style = MaterialTheme.typography.titleSmall,
                                 color = textColor,
-                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
+                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             // Date + Rep/Inst Row
             FormFieldRow(
                 label = "Date",
+                labelWidth = labelWidth,
                 isActive = false,
                 activeAccent = accentColor,
                 onClick = { showDatePicker = true },
@@ -636,430 +870,460 @@ fun AddEditTransactionScreen(
                 )
             }
 
-            // Account / From & Category / To Rows (Type-to-suggest + Select Picker)
+            // Account / From & Category / To Rows (Type-to-suggest floating overlay + Select Picker)
             if (txType == TransactionType.TRANSFER) {
-                FormFieldRow(
-                    label = "From",
-                    isActive = activePicker == ActivePicker.ACCOUNT || accountFieldFocused,
-                    activeAccent = accentColor,
-                    onClick = { openPicker(ActivePicker.ACCOUNT) },
-                    trailing = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (accountQuery.isNotEmpty() && accountFieldFocused) {
+                FieldWithFloatingSuggestions(
+                    showSuggestions = showAccountSuggestions && accountQuery.trim().isNotEmpty(),
+                    startIndent = labelWidth,
+                    suggestionsContent = {
+                        AccountSuggestionList(
+                            suggestions = filterAccounts(accountQuery, hasTypedAccountQuery),
+                            selectedAccountId = accountId,
+                            accentColor = accentColor,
+                            symbol = symbol,
+                            onSelect = { item ->
+                                accountId = item.accountId
+                                accountQuery = item.accountName
+                                hasTypedAccountQuery = false
+                                showAccountSuggestions = false
+                                focusManager.clearFocus()
+                            },
+                            onBrowseAll = { openPicker(ActivePicker.ACCOUNT) }
+                        )
+                    }
+                ) {
+                    FormFieldRow(
+                        label = "From",
+                        labelWidth = labelWidth,
+                        isActive = activePicker == ActivePicker.ACCOUNT || accountFieldFocused,
+                        activeAccent = accentColor,
+                        onClick = { openPicker(ActivePicker.ACCOUNT) },
+                        trailing = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (accountQuery.isNotEmpty() && accountFieldFocused) {
+                                    IconButton(
+                                        onClick = {
+                                            accountQuery = ""
+                                            accountId = ""
+                                            hasTypedAccountQuery = false
+                                            showAccountSuggestions = false
+                                        },
+                                        modifier = Modifier.size(30.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Close,
+                                            contentDescription = "Clear source account",
+                                            tint = LedgerTextMuted,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
                                 IconButton(
-                                    onClick = {
-                                        accountQuery = ""
-                                        accountId = ""
-                                        showAccountSuggestions = true
-                                    },
-                                    modifier = Modifier.size(30.dp)
+                                    onClick = { openPicker(ActivePicker.ACCOUNT) },
+                                    modifier = Modifier.size(32.dp).testTag("tx_from_account_picker_button")
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Filled.Close,
-                                        contentDescription = "Clear source account",
-                                        tint = LedgerTextMuted,
-                                        modifier = Modifier.size(16.dp)
+                                        imageVector = Icons.Filled.ArrowDropDown,
+                                        contentDescription = "Select source account",
+                                        tint = if (activePicker == ActivePicker.ACCOUNT) accentColor else LedgerTextSecondary
+                                    )
+                                }
+                                IconButton(
+                                    onClick = {
+                                        val tmpId = accountId
+                                        accountId = toAccountId
+                                        toAccountId = tmpId
+                                        val tmpQuery = accountQuery
+                                        accountQuery = toAccountQuery
+                                        toAccountQuery = tmpQuery
+                                    },
+                                    modifier = Modifier.size(32.dp).testTag("tx_swap_accounts_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.SwapVert,
+                                        contentDescription = "Swap accounts",
+                                        tint = LedgerTextSecondary
                                     )
                                 }
                             }
-                            IconButton(
-                                onClick = { openPicker(ActivePicker.ACCOUNT) },
-                                modifier = Modifier.size(32.dp).testTag("tx_from_account_picker_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.ArrowDropDown,
-                                    contentDescription = "Select source account",
-                                    tint = if (activePicker == ActivePicker.ACCOUNT) accentColor else LedgerTextSecondary
-                                )
-                            }
-                            IconButton(
-                                onClick = {
-                                    val tmpId = accountId
-                                    accountId = toAccountId
-                                    toAccountId = tmpId
-                                    val tmpQuery = accountQuery
-                                    accountQuery = toAccountQuery
-                                    toAccountQuery = tmpQuery
-                                },
-                                modifier = Modifier.size(32.dp).testTag("tx_swap_accounts_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.SwapVert,
-                                    contentDescription = "Swap accounts",
-                                    tint = LedgerTextSecondary
-                                )
-                            }
                         }
+                    ) {
+                        BasicTextField(
+                            value = accountQuery,
+                            onValueChange = { typed ->
+                                accountQuery = typed.take(80)
+                                hasTypedAccountQuery = typed.trim().isNotEmpty()
+                                val exact = allAccountSuggestions.firstOrNull {
+                                    it.accountName.equals(typed.trim(), ignoreCase = true)
+                                }
+                                accountId = exact?.accountId.orEmpty()
+                                showAccountSuggestions = typed.trim().isNotEmpty()
+                                activePicker = ActivePicker.NONE
+                            },
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = LedgerTextPrimary),
+                            singleLine = true,
+                            cursorBrush = SolidColor(accentColor),
+                            decorationBox = { inner ->
+                                if (accountQuery.isEmpty()) {
+                                    Text("Type or select source ledger", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
+                                }
+                                inner()
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { state ->
+                                    accountFieldFocused = state.isFocused
+                                    if (state.isFocused) {
+                                        hasTypedAccountQuery = false
+                                        activePicker = ActivePicker.NONE
+                                        showToAccountSuggestions = false
+                                        showCategorySuggestions = false
+                                        showNoteSuggestions = false
+                                        showTaggingSuggestions = false
+                                        showAccountSuggestions = false
+                                    } else {
+                                        showAccountSuggestions = false
+                                    }
+                                }
+                                .testTag("tx_from_account_input")
+                        )
+                    }
+                }
+
+                FieldWithFloatingSuggestions(
+                    showSuggestions = showToAccountSuggestions && toAccountQuery.trim().isNotEmpty(),
+                    startIndent = labelWidth,
+                    suggestionsContent = {
+                        AccountSuggestionList(
+                            suggestions = filterAccounts(toAccountQuery, hasTypedToAccountQuery),
+                            selectedAccountId = toAccountId,
+                            accentColor = accentColor,
+                            symbol = symbol,
+                            onSelect = { item ->
+                                toAccountId = item.accountId
+                                toAccountQuery = item.accountName
+                                hasTypedToAccountQuery = false
+                                showToAccountSuggestions = false
+                                focusManager.clearFocus()
+                            },
+                            onBrowseAll = { openPicker(ActivePicker.TO_ACCOUNT) }
+                        )
                     }
                 ) {
-                    BasicTextField(
-                        value = accountQuery,
-                        onValueChange = { typed ->
-                            accountQuery = typed.take(80)
-                            hasTypedAccountQuery = true
-                            val exact = allAccountSuggestions.firstOrNull {
-                                it.accountName.equals(typed.trim(), ignoreCase = true)
-                            }
-                            accountId = exact?.accountId.orEmpty()
-                            showAccountSuggestions = true
-                            activePicker = ActivePicker.NONE
-                        },
-                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = LedgerTextPrimary),
-                        singleLine = true,
-                        cursorBrush = SolidColor(accentColor),
-                        decorationBox = { inner ->
-                            if (accountQuery.isEmpty()) {
-                                Text("Type or select source ledger", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
-                            }
-                            inner()
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .onFocusChanged { state ->
-                                accountFieldFocused = state.isFocused
-                                if (state.isFocused) {
-                                    hasTypedAccountQuery = false
-                                    activePicker = ActivePicker.NONE
-                                    showToAccountSuggestions = false
-                                    showCategorySuggestions = false
-                                    showAccountSuggestions = true
-                                } else {
-                                    showAccountSuggestions = false
+                    FormFieldRow(
+                        label = "To",
+                        labelWidth = labelWidth,
+                        isActive = activePicker == ActivePicker.TO_ACCOUNT || toAccountFieldFocused,
+                        activeAccent = accentColor,
+                        onClick = { openPicker(ActivePicker.TO_ACCOUNT) },
+                        trailing = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (toAccountQuery.isNotEmpty() && toAccountFieldFocused) {
+                                    IconButton(
+                                        onClick = {
+                                            toAccountQuery = ""
+                                            toAccountId = ""
+                                            hasTypedToAccountQuery = false
+                                            showToAccountSuggestions = false
+                                        },
+                                        modifier = Modifier.size(30.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Close,
+                                            contentDescription = "Clear destination account",
+                                            tint = LedgerTextMuted,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
                                 }
-                            }
-                            .testTag("tx_from_account_input")
-                    )
-                }
-
-                if (showAccountSuggestions) {
-                    AccountSuggestionList(
-                        suggestions = filterAccounts(accountQuery, hasTypedAccountQuery),
-                        selectedAccountId = accountId,
-                        accentColor = accentColor,
-                        symbol = symbol,
-                        onSelect = { item ->
-                            accountId = item.accountId
-                            accountQuery = item.accountName
-                            hasTypedAccountQuery = false
-                            showAccountSuggestions = false
-                            focusManager.clearFocus()
-                        },
-                        onBrowseAll = { openPicker(ActivePicker.ACCOUNT) }
-                    )
-                }
-
-                FormFieldRow(
-                    label = "To",
-                    isActive = activePicker == ActivePicker.TO_ACCOUNT || toAccountFieldFocused,
-                    activeAccent = accentColor,
-                    onClick = { openPicker(ActivePicker.TO_ACCOUNT) },
-                    trailing = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (toAccountQuery.isNotEmpty() && toAccountFieldFocused) {
                                 IconButton(
-                                    onClick = {
-                                        toAccountQuery = ""
-                                        toAccountId = ""
-                                        hasTypedToAccountQuery = true
-                                        showToAccountSuggestions = true
-                                    },
-                                    modifier = Modifier.size(30.dp)
+                                    onClick = { openPicker(ActivePicker.TO_ACCOUNT) },
+                                    modifier = Modifier.size(32.dp).testTag("tx_to_account_picker_button")
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Filled.Close,
-                                        contentDescription = "Clear destination account",
-                                        tint = LedgerTextMuted,
-                                        modifier = Modifier.size(16.dp)
+                                        imageVector = Icons.Filled.ArrowDropDown,
+                                        contentDescription = "Select destination account",
+                                        tint = if (activePicker == ActivePicker.TO_ACCOUNT) accentColor else LedgerTextSecondary
                                     )
                                 }
                             }
-                            IconButton(
-                                onClick = { openPicker(ActivePicker.TO_ACCOUNT) },
-                                modifier = Modifier.size(32.dp).testTag("tx_to_account_picker_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.ArrowDropDown,
-                                    contentDescription = "Select destination account",
-                                    tint = if (activePicker == ActivePicker.TO_ACCOUNT) accentColor else LedgerTextSecondary
-                                )
-                            }
                         }
-                    }
-                ) {
-                    BasicTextField(
-                        value = toAccountQuery,
-                        onValueChange = { typed ->
-                            toAccountQuery = typed.take(80)
-                            hasTypedToAccountQuery = true
-                            val exact = allAccountSuggestions.firstOrNull {
-                                it.accountName.equals(typed.trim(), ignoreCase = true)
-                            }
-                            toAccountId = exact?.accountId.orEmpty()
-                            showToAccountSuggestions = true
-                            activePicker = ActivePicker.NONE
-                        },
-                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = LedgerTextPrimary),
-                        singleLine = true,
-                        cursorBrush = SolidColor(accentColor),
-                        decorationBox = { inner ->
-                            if (toAccountQuery.isEmpty()) {
-                                Text("Type or select destination ledger", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
-                            }
-                            inner()
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .onFocusChanged { state ->
-                                toAccountFieldFocused = state.isFocused
-                                if (state.isFocused) {
-                                    hasTypedToAccountQuery = false
-                                    activePicker = ActivePicker.NONE
-                                    showAccountSuggestions = false
-                                    showCategorySuggestions = false
-                                    showToAccountSuggestions = true
-                                } else {
-                                    showToAccountSuggestions = false
+                    ) {
+                        BasicTextField(
+                            value = toAccountQuery,
+                            onValueChange = { typed ->
+                                toAccountQuery = typed.take(80)
+                                hasTypedToAccountQuery = typed.trim().isNotEmpty()
+                                val exact = allAccountSuggestions.firstOrNull {
+                                    it.accountName.equals(typed.trim(), ignoreCase = true)
                                 }
-                            }
-                            .testTag("tx_to_account_input")
-                    )
-                }
-
-                if (showToAccountSuggestions) {
-                    AccountSuggestionList(
-                        suggestions = filterAccounts(toAccountQuery, hasTypedToAccountQuery),
-                        selectedAccountId = toAccountId,
-                        accentColor = accentColor,
-                        symbol = symbol,
-                        onSelect = { item ->
-                            toAccountId = item.accountId
-                            toAccountQuery = item.accountName
-                            hasTypedToAccountQuery = false
-                            showToAccountSuggestions = false
-                            focusManager.clearFocus()
-                        },
-                        onBrowseAll = { openPicker(ActivePicker.TO_ACCOUNT) }
-                    )
+                                toAccountId = exact?.accountId.orEmpty()
+                                showToAccountSuggestions = typed.trim().isNotEmpty()
+                                activePicker = ActivePicker.NONE
+                            },
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = LedgerTextPrimary),
+                            singleLine = true,
+                            cursorBrush = SolidColor(accentColor),
+                            decorationBox = { inner ->
+                                if (toAccountQuery.isEmpty()) {
+                                    Text("Type or select destination ledger", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
+                                }
+                                inner()
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { state ->
+                                    toAccountFieldFocused = state.isFocused
+                                    if (state.isFocused) {
+                                        hasTypedToAccountQuery = false
+                                        activePicker = ActivePicker.NONE
+                                        showAccountSuggestions = false
+                                        showCategorySuggestions = false
+                                        showNoteSuggestions = false
+                                        showTaggingSuggestions = false
+                                        showToAccountSuggestions = false
+                                    } else {
+                                        showToAccountSuggestions = false
+                                    }
+                                }
+                                .testTag("tx_to_account_input")
+                        )
+                    }
                 }
             } else {
-                FormFieldRow(
-                    label = "Account",
-                    isActive = activePicker == ActivePicker.ACCOUNT || accountFieldFocused,
-                    activeAccent = accentColor,
-                    onClick = { openPicker(ActivePicker.ACCOUNT) },
-                    trailing = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (accountQuery.isNotEmpty() && accountFieldFocused) {
+                FieldWithFloatingSuggestions(
+                    showSuggestions = showAccountSuggestions && accountQuery.trim().isNotEmpty(),
+                    startIndent = labelWidth,
+                    suggestionsContent = {
+                        AccountSuggestionList(
+                            suggestions = filterAccounts(accountQuery, hasTypedAccountQuery),
+                            selectedAccountId = accountId,
+                            accentColor = accentColor,
+                            symbol = symbol,
+                            onSelect = { item ->
+                                accountId = item.accountId
+                                accountQuery = item.accountName
+                                hasTypedAccountQuery = false
+                                showAccountSuggestions = false
+                                focusManager.clearFocus()
+                            },
+                            onBrowseAll = { openPicker(ActivePicker.ACCOUNT) }
+                        )
+                    }
+                ) {
+                    FormFieldRow(
+                        label = "Account",
+                        labelWidth = labelWidth,
+                        isActive = activePicker == ActivePicker.ACCOUNT || accountFieldFocused,
+                        activeAccent = accentColor,
+                        onClick = { openPicker(ActivePicker.ACCOUNT) },
+                        trailing = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (accountQuery.isNotEmpty() && accountFieldFocused) {
+                                    IconButton(
+                                        onClick = {
+                                            accountQuery = ""
+                                            accountId = ""
+                                            hasTypedAccountQuery = false
+                                            showAccountSuggestions = false
+                                        },
+                                        modifier = Modifier.size(30.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Close,
+                                            contentDescription = "Clear account",
+                                            tint = LedgerTextMuted,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
                                 IconButton(
-                                    onClick = {
-                                        accountQuery = ""
-                                        accountId = ""
-                                        hasTypedAccountQuery = true
-                                        showAccountSuggestions = true
-                                    },
-                                    modifier = Modifier.size(30.dp)
+                                    onClick = { openPicker(ActivePicker.ACCOUNT) },
+                                    modifier = Modifier.size(32.dp).testTag("tx_account_picker_button")
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Filled.Close,
-                                        contentDescription = "Clear account",
-                                        tint = LedgerTextMuted,
-                                        modifier = Modifier.size(16.dp)
+                                        imageVector = Icons.Filled.ArrowDropDown,
+                                        contentDescription = "Select account",
+                                        tint = if (activePicker == ActivePicker.ACCOUNT) accentColor else LedgerTextSecondary
                                     )
                                 }
                             }
-                            IconButton(
-                                onClick = { openPicker(ActivePicker.ACCOUNT) },
-                                modifier = Modifier.size(32.dp).testTag("tx_account_picker_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.ArrowDropDown,
-                                    contentDescription = "Select account",
-                                    tint = if (activePicker == ActivePicker.ACCOUNT) accentColor else LedgerTextSecondary
-                                )
-                            }
                         }
-                    }
-                ) {
-                    BasicTextField(
-                        value = accountQuery,
-                        onValueChange = { typed ->
-                            accountQuery = typed.take(80)
-                            hasTypedAccountQuery = true
-                            val exact = allAccountSuggestions.firstOrNull {
-                                it.accountName.equals(typed.trim(), ignoreCase = true)
-                            }
-                            accountId = exact?.accountId.orEmpty()
-                            showAccountSuggestions = true
-                            activePicker = ActivePicker.NONE
-                        },
-                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = LedgerTextPrimary),
-                        singleLine = true,
-                        cursorBrush = SolidColor(accentColor),
-                        decorationBox = { inner ->
-                            if (accountQuery.isEmpty()) {
-                                Text("Type or select ledger", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
-                            }
-                            inner()
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .onFocusChanged { state ->
-                                accountFieldFocused = state.isFocused
-                                if (state.isFocused) {
-                                    hasTypedAccountQuery = false
-                                    activePicker = ActivePicker.NONE
-                                    showCategorySuggestions = false
-                                    showAccountSuggestions = true
-                                } else {
-                                    showAccountSuggestions = false
+                    ) {
+                        BasicTextField(
+                            value = accountQuery,
+                            onValueChange = { typed ->
+                                accountQuery = typed.take(80)
+                                hasTypedAccountQuery = typed.trim().isNotEmpty()
+                                val exact = allAccountSuggestions.firstOrNull {
+                                    it.accountName.equals(typed.trim(), ignoreCase = true)
                                 }
-                            }
-                            .testTag("tx_account_input")
-                    )
-                }
-
-                if (showAccountSuggestions) {
-                    AccountSuggestionList(
-                        suggestions = filterAccounts(accountQuery, hasTypedAccountQuery),
-                        selectedAccountId = accountId,
-                        accentColor = accentColor,
-                        symbol = symbol,
-                        onSelect = { item ->
-                            accountId = item.accountId
-                            accountQuery = item.accountName
-                            hasTypedAccountQuery = false
-                            showAccountSuggestions = false
-                            focusManager.clearFocus()
-                        },
-                        onBrowseAll = { openPicker(ActivePicker.ACCOUNT) }
-                    )
-                }
-
-                FormFieldRow(
-                    label = "Category",
-                    isActive = activePicker == ActivePicker.CATEGORY || categoryFieldFocused,
-                    activeAccent = accentColor,
-                    onClick = { openPicker(ActivePicker.CATEGORY) },
-                    trailing = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (categoryQuery.isNotEmpty() && categoryFieldFocused) {
-                                IconButton(
-                                    onClick = {
-                                        categoryQuery = ""
-                                        categoryId = ""
-                                        subcategory = ""
-                                        hasTypedCategoryQuery = true
-                                        showCategorySuggestions = true
-                                    },
-                                    modifier = Modifier.size(30.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.Close,
-                                        contentDescription = "Clear category",
-                                        tint = LedgerTextMuted,
-                                        modifier = Modifier.size(16.dp)
-                                    )
+                                accountId = exact?.accountId.orEmpty()
+                                showAccountSuggestions = typed.trim().isNotEmpty()
+                                activePicker = ActivePicker.NONE
+                            },
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = LedgerTextPrimary),
+                            singleLine = true,
+                            cursorBrush = SolidColor(accentColor),
+                            decorationBox = { inner ->
+                                if (accountQuery.isEmpty()) {
+                                    Text("Type or select ledger", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
                                 }
-                            }
-                            IconButton(
-                                onClick = { openPicker(ActivePicker.CATEGORY) },
-                                modifier = Modifier.size(32.dp).testTag("tx_category_picker_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.ArrowDropDown,
-                                    contentDescription = "Select category",
-                                    tint = if (activePicker == ActivePicker.CATEGORY) accentColor else LedgerTextSecondary
-                                )
-                            }
-                        }
-                    }
-                ) {
-                    BasicTextField(
-                        value = categoryQuery,
-                        onValueChange = { typed ->
-                            categoryQuery = typed.take(80)
-                            hasTypedCategoryQuery = true
-                            val exact = allCategorySuggestions.firstOrNull {
-                                it.displayLabel.equals(typed.trim(), ignoreCase = true) ||
-                                    (it.subcategory == null && it.categoryName.equals(typed.trim(), ignoreCase = true))
-                            }
-                            if (exact != null) {
-                                categoryId = exact.categoryId
-                                subcategory = exact.subcategory.orEmpty()
-                            } else {
-                                categoryId = ""
-                                subcategory = ""
-                            }
-                            showCategorySuggestions = true
-                            activePicker = ActivePicker.NONE
-                        },
-                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = LedgerTextPrimary),
-                        singleLine = true,
-                        cursorBrush = SolidColor(accentColor),
-                        decorationBox = { inner ->
-                            if (categoryQuery.isEmpty()) {
-                                Text(
-                                    text = if (txType == TransactionType.INCOME) {
-                                        "Type or select income ledger"
+                                inner()
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { state ->
+                                    accountFieldFocused = state.isFocused
+                                    if (state.isFocused) {
+                                        hasTypedAccountQuery = false
+                                        activePicker = ActivePicker.NONE
+                                        showCategorySuggestions = false
+                                        showNoteSuggestions = false
+                                        showTaggingSuggestions = false
+                                        showAccountSuggestions = false
                                     } else {
-                                        "Type or select expense ledger"
-                                    },
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = LedgerTextMuted
-                                )
-                            }
-                            inner()
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .onFocusChanged { state ->
-                                categoryFieldFocused = state.isFocused
-                                if (state.isFocused) {
-                                    hasTypedCategoryQuery = false
-                                    activePicker = ActivePicker.NONE
-                                    showAccountSuggestions = false
-                                    showCategorySuggestions = true
-                                } else {
-                                    showCategorySuggestions = false
+                                        showAccountSuggestions = false
+                                    }
                                 }
-                            }
-                            .testTag("tx_category_input")
-                    )
+                                .testTag("tx_account_input")
+                        )
+                    }
                 }
 
-                if (showCategorySuggestions) {
-                    CategorySuggestionList(
-                        suggestions = filterCategorySuggestions(categoryQuery, hasTypedCategoryQuery),
-                        selectedCategoryId = categoryId,
-                        selectedSubcategory = subcategory,
-                        queryText = if (hasTypedCategoryQuery) categoryQuery else "",
-                        txType = txType,
-                        accentColor = accentColor,
-                        onSelect = { item ->
-                            categoryId = item.categoryId
-                            subcategory = item.subcategory.orEmpty()
-                            categoryQuery = item.displayLabel
-                            hasTypedCategoryQuery = false
-                            showCategorySuggestions = false
-                            focusManager.clearFocus()
-                        },
-                        onCreateNewLedger = if (onCreateCategoryLedger != null) {
-                            { typedName ->
-                                draftLedgerNameForDialog = typedName
-                                draftCategoryIdForDialog = categoryId.takeIf { it.isNotBlank() }
+                FieldWithFloatingSuggestions(
+                    showSuggestions = showCategorySuggestions && categoryQuery.trim().isNotEmpty(),
+                    startIndent = labelWidth,
+                    suggestionsContent = {
+                        CategorySuggestionList(
+                            suggestions = filterCategorySuggestions(categoryQuery, hasTypedCategoryQuery),
+                            selectedCategoryId = categoryId,
+                            selectedSubcategory = subcategory,
+                            queryText = if (hasTypedCategoryQuery) categoryQuery else "",
+                            txType = txType,
+                            accentColor = accentColor,
+                            onSelect = { item ->
+                                categoryId = item.categoryId
+                                subcategory = item.subcategory.orEmpty()
+                                categoryQuery = item.displayLabel
+                                hasTypedCategoryQuery = false
                                 showCategorySuggestions = false
                                 focusManager.clearFocus()
-                                showCreateLedgerDialog = true
+                            },
+                            onCreateNewLedger = if (onCreateCategoryLedger != null) {
+                                { typedName ->
+                                    draftLedgerNameForDialog = typedName
+                                    draftCategoryIdForDialog = categoryId.takeIf { it.isNotBlank() }
+                                    showCategorySuggestions = false
+                                    focusManager.clearFocus()
+                                    showCreateLedgerDialog = true
+                                }
+                            } else null,
+                            onBrowseAll = { openPicker(ActivePicker.CATEGORY) }
+                        )
+                    }
+                ) {
+                    FormFieldRow(
+                        label = "Category",
+                        labelWidth = labelWidth,
+                        isActive = activePicker == ActivePicker.CATEGORY || categoryFieldFocused,
+                        activeAccent = accentColor,
+                        onClick = { openPicker(ActivePicker.CATEGORY) },
+                        trailing = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (categoryQuery.isNotEmpty() && categoryFieldFocused) {
+                                    IconButton(
+                                        onClick = {
+                                            categoryQuery = ""
+                                            categoryId = ""
+                                            subcategory = ""
+                                            hasTypedCategoryQuery = false
+                                            showCategorySuggestions = false
+                                        },
+                                        modifier = Modifier.size(30.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Close,
+                                            contentDescription = "Clear category",
+                                            tint = LedgerTextMuted,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                                IconButton(
+                                    onClick = { openPicker(ActivePicker.CATEGORY) },
+                                    modifier = Modifier.size(32.dp).testTag("tx_category_picker_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.ArrowDropDown,
+                                        contentDescription = "Select category",
+                                        tint = if (activePicker == ActivePicker.CATEGORY) accentColor else LedgerTextSecondary
+                                    )
+                                }
                             }
-                        } else null,
-                        onBrowseAll = { openPicker(ActivePicker.CATEGORY) }
-                    )
+                        }
+                    ) {
+                        BasicTextField(
+                            value = categoryQuery,
+                            onValueChange = { typed ->
+                                categoryQuery = typed.take(80)
+                                hasTypedCategoryQuery = typed.trim().isNotEmpty()
+                                val exact = allCategorySuggestions.firstOrNull {
+                                    it.displayLabel.equals(typed.trim(), ignoreCase = true) ||
+                                        (it.subcategory == null && it.categoryName.equals(typed.trim(), ignoreCase = true))
+                                }
+                                if (exact != null) {
+                                    categoryId = exact.categoryId
+                                    subcategory = exact.subcategory.orEmpty()
+                                } else {
+                                    categoryId = ""
+                                    subcategory = ""
+                                }
+                                showCategorySuggestions = typed.trim().isNotEmpty()
+                                activePicker = ActivePicker.NONE
+                            },
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = LedgerTextPrimary),
+                            singleLine = true,
+                            cursorBrush = SolidColor(accentColor),
+                            decorationBox = { inner ->
+                                if (categoryQuery.isEmpty()) {
+                                    Text(
+                                        text = if (txType == TransactionType.INCOME) {
+                                            "Type or select income ledger"
+                                        } else {
+                                            "Type or select expense ledger"
+                                        },
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = LedgerTextMuted
+                                    )
+                                }
+                                inner()
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { state ->
+                                    categoryFieldFocused = state.isFocused
+                                    if (state.isFocused) {
+                                        hasTypedCategoryQuery = false
+                                        activePicker = ActivePicker.NONE
+                                        showAccountSuggestions = false
+                                        showNoteSuggestions = false
+                                        showTaggingSuggestions = false
+                                        showCategorySuggestions = false
+                                    } else {
+                                        showCategorySuggestions = false
+                                    }
+                                }
+                                .testTag("tx_category_input")
+                        )
+                    }
                 }
             }
 
             // Amount Row (+ Fees pill for Transfer)
             FormFieldRow(
                 label = "Amount",
+                labelWidth = labelWidth,
                 isActive = false,
                 activeAccent = accentColor,
                 onClick = { activePicker = ActivePicker.NONE },
@@ -1101,6 +1365,7 @@ fun AddEditTransactionScreen(
                             fontWeight = FontWeight.SemiBold
                         ),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        visualTransformation = IndianNumberVisualTransformation,
                         singleLine = true,
                         cursorBrush = SolidColor(accentColor),
                         decorationBox = { inner ->
@@ -1114,9 +1379,14 @@ fun AddEditTransactionScreen(
                 }
             }
 
-            if (txType == TransactionType.TRANSFER && showFeeField) {
+            AnimatedVisibility(
+                visible = txType == TransactionType.TRANSFER && showFeeField,
+                enter = suggestionEnter,
+                exit = suggestionExit
+            ) {
                 FormFieldRow(
                     label = "Fees",
+                    labelWidth = labelWidth,
                     isActive = false,
                     activeAccent = accentColor,
                     onClick = { activePicker = ActivePicker.NONE }
@@ -1129,6 +1399,7 @@ fun AddEditTransactionScreen(
                         },
                         textStyle = MaterialTheme.typography.bodyLarge.copy(color = LedgerTextPrimary),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        visualTransformation = IndianNumberVisualTransformation,
                         singleLine = true,
                         cursorBrush = SolidColor(accentColor),
                         decorationBox = { inner ->
@@ -1142,99 +1413,181 @@ fun AddEditTransactionScreen(
                 }
             }
 
-            // Note Row
-            FormFieldRow(
-                label = "Note",
-                isActive = false,
-                activeAccent = accentColor,
-                onClick = { activePicker = ActivePicker.NONE }
-            ) {
-                BasicTextField(
-                    value = noteText,
-                    onValueChange = { noteText = it.take(140) },
-                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = LedgerTextPrimary),
-                    singleLine = true,
-                    cursorBrush = SolidColor(accentColor),
-                    decorationBox = { inner ->
-                        if (noteText.isEmpty()) {
-                            Text("Enter title or note", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
-                        }
-                        inner()
-                    },
-                    modifier = Modifier.fillMaxWidth().testTag("tx_note_input")
-                )
+            // Note Row (with floating type-ahead matching suggestions from previous entries)
+            val matchingNotes = remember(allNoteSuggestions, noteText, showNoteSuggestions, noteFieldFocused) {
+                if (showNoteSuggestions && noteFieldFocused && noteText.trim().isNotEmpty()) {
+                    filterTextSuggestions(allNoteSuggestions, noteText)
+                } else {
+                    emptyList()
+                }
             }
-
-            // Tagging Row (Styled identically to Note, right below Note)
-            FormFieldRow(
-                label = "Tagging",
-                isActive = false,
-                activeAccent = accentColor,
-                onClick = { activePicker = ActivePicker.NONE },
-                trailing = if (taggingText.isNotEmpty()) {
-                    {
-                        IconButton(
-                            onClick = { taggingText = "" },
-                            modifier = Modifier.size(28.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Close,
-                                contentDescription = "Clear tagging",
-                                tint = LedgerTextMuted,
-                                modifier = Modifier.size(16.dp)
-                            )
+            FieldWithFloatingSuggestions(
+                showSuggestions = matchingNotes.isNotEmpty(),
+                startIndent = labelWidth,
+                suggestionsContent = {
+                    TextSuggestionList(
+                        suggestions = matchingNotes,
+                        currentValue = noteText,
+                        accentColor = accentColor,
+                        listTestTag = "tx_note_suggestions_list",
+                        itemTestTagPrefix = "tx_note_suggestion_",
+                        onSelect = { selected ->
+                            noteText = selected.text
+                            showNoteSuggestions = false
+                            focusManager.clearFocus()
                         }
-                    }
-                } else null
+                    )
+                }
             ) {
-                BasicTextField(
-                    value = taggingText,
-                    onValueChange = { taggingText = it.take(60) },
-                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = LedgerTextPrimary),
-                    singleLine = true,
-                    cursorBrush = SolidColor(accentColor),
-                    decorationBox = { inner ->
-                        if (taggingText.isEmpty()) {
-                            Text("e.g. Home, Personal, Business", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
+                FormFieldRow(
+                    label = "Note",
+                    labelWidth = labelWidth,
+                    isActive = noteFieldFocused,
+                    activeAccent = accentColor,
+                    onClick = { activePicker = ActivePicker.NONE },
+                    trailing = if (noteText.isNotEmpty()) {
+                        {
+                            IconButton(
+                                onClick = {
+                                    noteText = ""
+                                    showNoteSuggestions = false
+                                },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Close,
+                                    contentDescription = "Clear note",
+                                    tint = LedgerTextMuted,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
                         }
-                        inner()
-                    },
-                    modifier = Modifier.fillMaxWidth().testTag("tx_tagging_input")
-                )
-            }
-
-            // Quick-select chips for existing Tagging buckets
-            if (bundle.allTaggings.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(8.dp))
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.fillMaxWidth().padding(start = 78.dp)
+                    } else null
                 ) {
-                    bundle.allTaggings.forEach { existingTagging ->
-                        val isSelected = taggingText.equals(existingTagging, ignoreCase = true)
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = if (isSelected) accentColor.copy(alpha = 0.22f) else LedgerSurfaceElevated,
-                            border = BorderStroke(1.dp, if (isSelected) accentColor else LedgerBorder),
-                            modifier = Modifier
-                                .clickable {
-                                    taggingText = if (isSelected) "" else existingTagging
+                    BasicTextField(
+                        value = noteText,
+                        onValueChange = { typed ->
+                            noteText = typed.take(140)
+                            showNoteSuggestions = typed.trim().isNotEmpty()
+                            activePicker = ActivePicker.NONE
+                        },
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = LedgerTextPrimary),
+                        singleLine = true,
+                        cursorBrush = SolidColor(accentColor),
+                        decorationBox = { inner ->
+                            if (noteText.isEmpty()) {
+                                Text("Enter title or note", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
+                            }
+                            inner()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onFocusChanged { state ->
+                                noteFieldFocused = state.isFocused
+                                if (state.isFocused) {
+                                    activePicker = ActivePicker.NONE
+                                    showAccountSuggestions = false
+                                    showToAccountSuggestions = false
+                                    showCategorySuggestions = false
+                                    showTaggingSuggestions = false
+                                    showNoteSuggestions = false
+                                } else {
+                                    showNoteSuggestions = false
                                 }
-                                .testTag("tx_tagging_chip_$existingTagging")
-                        ) {
-                            Text(
-                                text = existingTagging,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (isSelected) accentColor else LedgerTextSecondary,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                            )
-                        }
-                    }
+                            }
+                            .testTag("tx_note_input")
+                    )
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            // Tagging Row (Styled identically to Note, with floating type-ahead matching suggestions)
+            val matchingTags = remember(allTaggingSuggestions, taggingText, showTaggingSuggestions, taggingFieldFocused) {
+                if (showTaggingSuggestions && taggingFieldFocused && taggingText.trim().isNotEmpty()) {
+                    filterTextSuggestions(allTaggingSuggestions, taggingText)
+                } else {
+                    emptyList()
+                }
+            }
+            FieldWithFloatingSuggestions(
+                showSuggestions = matchingTags.isNotEmpty(),
+                startIndent = labelWidth,
+                suggestionsContent = {
+                    TextSuggestionList(
+                        suggestions = matchingTags,
+                        currentValue = taggingText,
+                        accentColor = accentColor,
+                        listTestTag = "tx_tagging_suggestions_list",
+                        itemTestTagPrefix = "tx_tagging_suggestion_",
+                        onSelect = { selected ->
+                            taggingText = selected.text
+                            showTaggingSuggestions = false
+                            focusManager.clearFocus()
+                        }
+                    )
+                }
+            ) {
+                FormFieldRow(
+                    label = "Tagging",
+                    labelWidth = labelWidth,
+                    isActive = taggingFieldFocused,
+                    activeAccent = accentColor,
+                    onClick = { activePicker = ActivePicker.NONE },
+                    trailing = if (taggingText.isNotEmpty()) {
+                        {
+                            IconButton(
+                                onClick = {
+                                    taggingText = ""
+                                    showTaggingSuggestions = false
+                                },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Close,
+                                    contentDescription = "Clear tagging",
+                                    tint = LedgerTextMuted,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    } else null
+                ) {
+                    BasicTextField(
+                        value = taggingText,
+                        onValueChange = { typed ->
+                            taggingText = typed.take(60)
+                            showTaggingSuggestions = typed.trim().isNotEmpty()
+                            activePicker = ActivePicker.NONE
+                        },
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = LedgerTextPrimary),
+                        singleLine = true,
+                        cursorBrush = SolidColor(accentColor),
+                        decorationBox = { inner ->
+                            if (taggingText.isEmpty()) {
+                                Text("e.g. Home, Personal, Business", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
+                            }
+                            inner()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onFocusChanged { state ->
+                                taggingFieldFocused = state.isFocused
+                                if (state.isFocused) {
+                                    activePicker = ActivePicker.NONE
+                                    showAccountSuggestions = false
+                                    showToAccountSuggestions = false
+                                    showCategorySuggestions = false
+                                    showNoteSuggestions = false
+                                    showTaggingSuggestions = false
+                                } else {
+                                    showTaggingSuggestions = false
+                                }
+                            }
+                            .testTag("tx_tagging_input")
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
 
             // Description Field
             BasicTextField(
@@ -1257,18 +1610,22 @@ fun AddEditTransactionScreen(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
             )
 
-            if (validationError != null) {
-                Spacer(modifier = Modifier.height(8.dp))
+            AnimatedVisibility(
+                visible = validationError != null,
+                enter = suggestionEnter,
+                exit = suggestionExit
+            ) {
                 Text(
-                    text = validationError!!,
+                    text = validationError.orEmpty(),
                     style = MaterialTheme.typography.bodySmall,
-                    color = LedgerCoral
+                    color = LedgerCoral,
+                    modifier = Modifier.padding(top = 8.dp)
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-            // Save + Continue (new) OR Save + Copy + Delete (existing) Buttons Row
+            // Save + Copy + Delete Equal-Size Buttons Row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1276,114 +1633,111 @@ fun AddEditTransactionScreen(
                 Button(
                     onClick = { submit(keepOpen = false) },
                     shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp),
+                    contentPadding = PaddingValues(horizontal = 6.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = accentColor,
                         contentColor = saveButtonTextColor
                     ),
                     modifier = Modifier
-                        .weight(if (existing == null) 2.4f else 1.35f)
+                        .weight(1f)
                         .height(48.dp)
                         .testTag("tx_save_button")
                 ) {
                     Text(
                         text = "Save",
                         style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
 
-                if (existing == null) {
+                if (onCopy != null) {
                     OutlinedButton(
-                        onClick = { submit(keepOpen = true) },
+                        onClick = { startCopyFlow() },
                         shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp),
                         border = BorderStroke(1.dp, LedgerBorder),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = LedgerTextPrimary),
                         modifier = Modifier
                             .weight(1f)
                             .height(48.dp)
-                            .testTag("tx_continue_button")
+                            .testTag("tx_copy_button")
                     ) {
-                        Text("Continue", style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                        Icon(
+                            imageVector = Icons.Filled.ContentCopy,
+                            contentDescription = null,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Copy",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
-                } else {
-                    if (onCopy != null) {
-                        OutlinedButton(
-                            onClick = { startCopyFlow() },
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp),
-                            border = BorderStroke(1.dp, LedgerBorder),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = LedgerTextPrimary),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .testTag("tx_copy_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.ContentCopy,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "Copy",
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                        }
-                    }
-                    if (onDelete != null) {
-                        OutlinedButton(
-                            onClick = { showDeleteConfirmDialog = true },
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp),
-                            border = BorderStroke(1.dp, LedgerCoral.copy(alpha = 0.65f)),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = LedgerCoral),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .testTag("tx_delete_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.DeleteOutline,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "Delete",
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                        }
+                }
+
+                if (onDelete != null || existing == null) {
+                    OutlinedButton(
+                        onClick = { showDeleteConfirmDialog = true },
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp),
+                        border = BorderStroke(1.dp, LedgerCoral.copy(alpha = 0.65f)),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = LedgerCoral),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("tx_delete_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.DeleteOutline,
+                            contentDescription = null,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Delete",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }
+            }
         }
 
-        // Bottom Interactive Picker Drawer (Matches 00:12 - 00:19)
-        if (activePicker != ActivePicker.NONE) {
+        // Bottom Interactive Picker Drawer (Smooth slide-in/out & responsive height)
+        AnimatedVisibility(
+            visible = activePicker != ActivePicker.NONE,
+            enter = slideInVertically(tween(200)) { it } + fadeIn(tween(160)),
+            exit = slideOutVertically(tween(170)) { it } + fadeOut(tween(120))
+        ) {
+            val shownPicker = if (activePicker != ActivePicker.NONE) activePicker else lastVisiblePicker
             Surface(
                 color = LedgerSurface,
                 tonalElevation = 4.dp,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(280.dp)
+                    .height(pickerHeight)
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(LedgerSurfaceHighlight)
-                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                            .padding(horizontal = 14.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = when (activePicker) {
+                            text = when (shownPicker) {
                                 ActivePicker.ACCOUNT -> if (txType == TransactionType.TRANSFER) "From Account" else "Accounts"
                                 ActivePicker.TO_ACCOUNT -> "To Account"
                                 ActivePicker.CATEGORY -> if (txType == TransactionType.INCOME) {
@@ -1399,7 +1753,7 @@ fun AddEditTransactionScreen(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )
-                        if (activePicker == ActivePicker.CATEGORY && onCreateCategoryLedger != null) {
+                        if (shownPicker == ActivePicker.CATEGORY && onCreateCategoryLedger != null) {
                             Surface(
                                 onClick = {
                                     draftLedgerNameForDialog = ""
@@ -1436,7 +1790,7 @@ fun AddEditTransactionScreen(
                         }
                         IconButton(
                             onClick = {
-                                if (activePicker == ActivePicker.CATEGORY) {
+                                if (shownPicker == ActivePicker.CATEGORY) {
                                     onManageCategories(
                                         if (txType == TransactionType.INCOME) CategoryType.INCOME else CategoryType.EXPENSE
                                     )
@@ -1456,9 +1810,11 @@ fun AddEditTransactionScreen(
                         }
                     }
 
-                    when (activePicker) {
+                    when (shownPicker) {
                         ActivePicker.ACCOUNT, ActivePicker.TO_ACCOUNT -> {
-                            val sections = bundle.accountSections.filter { it.accounts.isNotEmpty() }
+                            val sections = remember(bundle.accountSections) {
+                                bundle.accountSections.filter { it.accounts.isNotEmpty() }
+                            }
                             val selectedGroup = sections.firstOrNull { it.group.id == expandedGroupId }
                                 ?: sections.firstOrNull()
 
@@ -1505,7 +1861,7 @@ fun AddEditTransactionScreen(
                                 LazyColumn(modifier = Modifier.weight(1.1f).background(LedgerSurface)) {
                                     val accs = selectedGroup?.accounts.orEmpty()
                                     items(accs, key = { it.account.id }) { item ->
-                                        val isSelected = if (activePicker == ActivePicker.ACCOUNT) {
+                                        val isSelected = if (shownPicker == ActivePicker.ACCOUNT) {
                                             accountId == item.account.id
                                         } else {
                                             toAccountId == item.account.id
@@ -1515,7 +1871,7 @@ fun AddEditTransactionScreen(
                                                 .fillMaxWidth()
                                                 .background(if (isSelected) accentColor.copy(alpha = 0.16f) else Color.Transparent)
                                                 .clickable {
-                                                    if (activePicker == ActivePicker.ACCOUNT) {
+                                                    if (shownPicker == ActivePicker.ACCOUNT) {
                                                         accountId = item.account.id
                                                         accountQuery = item.account.name
                                                         activePicker = if (txType == TransactionType.TRANSFER) {
@@ -1529,7 +1885,7 @@ fun AddEditTransactionScreen(
                                                         activePicker = ActivePicker.NONE
                                                     }
                                                 }
-                                                .padding(horizontal = 14.dp, vertical = 13.dp),
+                                                .padding(horizontal = 14.dp, vertical = 12.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Text(
@@ -1693,6 +2049,7 @@ fun AddEditTransactionScreen(
                 }
             }
         }
+        }
     }
 
     if (showDatePicker) {
@@ -1721,6 +2078,69 @@ fun AddEditTransactionScreen(
         }
     }
 
+    if (showCopyOptionsDialog && onCopy != null) {
+        val todayDay = LedgerFormatters.todayEpochDay()
+        AlertDialog(
+            onDismissRequest = { showCopyOptionsDialog = false },
+            containerColor = LedgerSurface,
+            title = {
+                Text(
+                    text = "Copy Entry",
+                    color = LedgerTextPrimary,
+                    fontWeight = FontWeight.SemiBold
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Choose a date to open this copy as a draft:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = LedgerTextSecondary
+                    )
+                    CopyDateOptionRow(
+                        icon = Icons.Filled.Event,
+                        title = "Same Date",
+                        subtitle = LedgerFormatters.formatFullDateInput(epochDay),
+                        accentColor = accentColor,
+                        testTag = "tx_copy_same_date_option",
+                        onClick = { openCopiedDraft(epochDay) }
+                    )
+                    CopyDateOptionRow(
+                        icon = Icons.Filled.Today,
+                        title = "Today's Date",
+                        subtitle = LedgerFormatters.formatFullDateInput(todayDay),
+                        accentColor = LedgerBlue,
+                        testTag = "tx_copy_today_option",
+                        onClick = { openCopiedDraft(todayDay) }
+                    )
+                    CopyDateOptionRow(
+                        icon = Icons.Filled.DateRange,
+                        title = "Choose Date from Calendar",
+                        subtitle = "Pick a custom date",
+                        accentColor = LedgerAmber,
+                        testTag = "tx_copy_calendar_option",
+                        onClick = {
+                            showCopyOptionsDialog = false
+                            showCopyDatePicker = true
+                        }
+                    )
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(
+                    onClick = { showCopyOptionsDialog = false },
+                    modifier = Modifier.testTag("tx_copy_options_cancel_button")
+                ) {
+                    Text("Cancel", color = LedgerTextSecondary)
+                }
+            }
+        )
+    }
+
     if (showCopyDatePicker && onCopy != null) {
         val copyDatePickerState = rememberDatePickerState(
             initialSelectedDateMillis = LedgerFormatters.epochDayToMillis(LedgerFormatters.todayEpochDay())
@@ -1733,19 +2153,12 @@ fun AddEditTransactionScreen(
                         val chosenMillis = copyDatePickerState.selectedDateMillis
                         if (chosenMillis != null) {
                             val chosenEpochDay = chosenMillis / 86_400_000L
-                            val copiedModel = buildValidatedTransaction(
-                                targetEpochDay = chosenEpochDay,
-                                clearId = true
-                            )
-                            showCopyDatePicker = false
-                            if (copiedModel != null) {
-                                onCopy(copiedModel)
-                            }
+                            openCopiedDraft(chosenEpochDay)
                         }
                     },
                     enabled = copyDatePickerState.selectedDateMillis != null,
                     modifier = Modifier.testTag("tx_copy_date_confirm_button")
-                ) { Text("Copy", color = LedgerCoral, fontWeight = FontWeight.SemiBold) }
+                ) { Text("Open Draft", color = LedgerCoral, fontWeight = FontWeight.SemiBold) }
             },
             dismissButton = {
                 TextButton(
@@ -1760,7 +2173,7 @@ fun AddEditTransactionScreen(
                 state = copyDatePickerState,
                 title = {
                     Text(
-                        text = "Choose date for copied entry",
+                        text = "Choose date for draft copy",
                         style = MaterialTheme.typography.labelLarge,
                         color = LedgerTextSecondary,
                         modifier = Modifier.padding(start = 24.dp, end = 12.dp, top = 16.dp)
@@ -1936,14 +2349,23 @@ fun AddEditTransactionScreen(
         )
     }
 
-    if (showDeleteConfirmDialog && existing != null && onDelete != null) {
+    if (showDeleteConfirmDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirmDialog = false },
             containerColor = LedgerSurface,
-            title = { Text("Delete Entry?", color = LedgerTextPrimary) },
+            title = {
+                Text(
+                    text = if (isDraftCopy) "Discard Draft?" else "Delete Entry?",
+                    color = LedgerTextPrimary
+                )
+            },
             text = {
                 Text(
-                    text = "This transaction will be permanently deleted.",
+                    text = when {
+                        existing != null -> "This transaction will be permanently deleted."
+                        isDraftCopy -> "Discard this draft copy? The original entry will remain unchanged."
+                        else -> "Discard this unsaved entry and close?"
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = LedgerTextSecondary
                 )
@@ -1952,7 +2374,11 @@ fun AddEditTransactionScreen(
                 Button(
                     onClick = {
                         showDeleteConfirmDialog = false
-                        onDelete(existing.id)
+                        if (existing != null && onDelete != null) {
+                            onDelete(existing.id)
+                        } else {
+                            onBack()
+                        }
                     },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = LedgerCoral,
@@ -1960,7 +2386,7 @@ fun AddEditTransactionScreen(
                     ),
                     modifier = Modifier.testTag("tx_delete_confirm_button")
                 ) {
-                    Text("Delete", fontWeight = FontWeight.SemiBold)
+                    Text(if (isDraftCopy) "Discard" else "Delete", fontWeight = FontWeight.SemiBold)
                 }
             },
             dismissButton = {
@@ -2000,14 +2426,93 @@ fun AddEditTransactionScreen(
 }
 
 @Composable
+private fun CopyDateOptionRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    accentColor: Color,
+    testTag: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = LedgerSurfaceElevated,
+        border = BorderStroke(1.dp, LedgerBorder),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .testTag(testTag)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(accentColor.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = accentColor,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = LedgerTextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = LedgerTextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = LedgerTextMuted,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    }
+}
+
+@Composable
 private fun FormFieldRow(
     label: String,
+    labelWidth: Dp = 76.dp,
     isActive: Boolean,
     activeAccent: Color,
     onClick: () -> Unit,
     trailing: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit
 ) {
+    val dividerColor by animateColorAsState(
+        targetValue = if (isActive) activeAccent else LedgerDivider,
+        animationSpec = tween(160),
+        label = "field_div_color_$label"
+    )
+    val dividerThickness by animateDpAsState(
+        targetValue = if (isActive) 1.5.dp else 1.dp,
+        animationSpec = tween(160),
+        label = "field_div_thick_$label"
+    )
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -2016,30 +2521,111 @@ private fun FormFieldRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 11.dp),
+                .heightIn(min = 46.dp)
+                .padding(vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = label,
                 style = MaterialTheme.typography.bodyMedium,
                 color = LedgerTextSecondary,
-                modifier = Modifier.width(78.dp)
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.width(labelWidth)
             )
             Box(modifier = Modifier.weight(1f)) {
                 content()
             }
             if (trailing != null) {
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 trailing()
             }
         }
         Row(modifier = Modifier.fillMaxWidth()) {
-            Spacer(modifier = Modifier.width(78.dp))
-            HorizontalDivider(
-                color = if (isActive) activeAccent else LedgerDivider,
-                thickness = if (isActive) 1.5.dp else 1.dp,
-                modifier = Modifier.weight(1f)
-            )
+            Spacer(modifier = Modifier.width(labelWidth))
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(2.dp),
+                contentAlignment = Alignment.BottomCenter
+            ) {
+                HorizontalDivider(
+                    color = dividerColor,
+                    thickness = dividerThickness,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
+}
+
+private class FieldDropdownPositionProvider(
+    private val startIndentPx: Int,
+    private val verticalGapPx: Int
+) : PopupPositionProvider {
+    override fun calculatePosition(
+        anchorBounds: IntRect,
+        windowSize: IntSize,
+        layoutDirection: LayoutDirection,
+        popupContentSize: IntSize
+    ): IntOffset {
+        val maxX = (windowSize.width - popupContentSize.width).coerceAtLeast(0)
+        val x = (anchorBounds.left + startIndentPx).coerceIn(0, maxX)
+        val belowY = anchorBounds.bottom + verticalGapPx
+        val aboveY = anchorBounds.top - popupContentSize.height - verticalGapPx
+        val fitsBelow = belowY + popupContentSize.height <= windowSize.height
+        val y = when {
+            fitsBelow -> belowY
+            aboveY >= 0 -> aboveY
+            else -> belowY.coerceIn(0, (windowSize.height - popupContentSize.height).coerceAtLeast(0))
+        }
+        return IntOffset(x, y)
+    }
+}
+
+@Composable
+private fun FieldWithFloatingSuggestions(
+    showSuggestions: Boolean,
+    startIndent: Dp,
+    suggestionsContent: @Composable () -> Unit,
+    fieldContent: @Composable () -> Unit
+) {
+    val density = LocalDensity.current
+    var anchorSize by remember { mutableStateOf(IntSize.Zero) }
+    val startIndentPx = with(density) { startIndent.roundToPx() }
+    val verticalGapPx = with(density) { 4.dp.roundToPx() }
+    val positionProvider = remember(startIndentPx, verticalGapPx) {
+        FieldDropdownPositionProvider(
+            startIndentPx = startIndentPx,
+            verticalGapPx = verticalGapPx
+        )
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .onSizeChanged { anchorSize = it }
+    ) {
+        fieldContent()
+
+        if (showSuggestions && anchorSize.width > 0) {
+            val dropdownWidth = with(density) {
+                (anchorSize.width.toDp() - startIndent).coerceAtLeast(180.dp)
+            }
+            Popup(
+                popupPositionProvider = positionProvider,
+                properties = PopupProperties(
+                    focusable = false,
+                    dismissOnBackPress = false,
+                    dismissOnClickOutside = false,
+                    clippingEnabled = true
+                )
+            ) {
+                Box(modifier = Modifier.width(dropdownWidth)) {
+                    suggestionsContent()
+                }
+            }
         }
     }
 }
@@ -2056,58 +2642,66 @@ private fun AccountSuggestionList(
     Surface(
         shape = RoundedCornerShape(10.dp),
         color = LedgerSurfaceElevated,
-        border = BorderStroke(1.dp, LedgerBorder),
+        tonalElevation = 6.dp,
+        shadowElevation = 10.dp,
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.35f)),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 78.dp, top = 4.dp, bottom = 6.dp)
             .testTag("tx_account_suggestions_list")
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            if (suggestions.isEmpty()) {
-                Text(
-                    text = "No matching ledgers found",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = LedgerTextMuted,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
-                )
-            } else {
-                suggestions.forEachIndexed { idx, item ->
-                    val isSelected = item.accountId == selectedAccountId
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(if (isSelected) accentColor.copy(alpha = 0.14f) else Color.Transparent)
-                            .clickable { onSelect(item) }
-                            .padding(horizontal = 12.dp, vertical = 10.dp)
-                            .testTag("tx_account_suggestion_${item.accountId}"),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 210.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                if (suggestions.isEmpty()) {
+                    Text(
+                        text = "No matching ledgers found",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = LedgerTextMuted,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                    )
+                } else {
+                    suggestions.forEachIndexed { idx, item ->
+                        val isSelected = item.accountId == selectedAccountId
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(if (isSelected) accentColor.copy(alpha = 0.14f) else Color.Transparent)
+                                .clickable { onSelect(item) }
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                                .testTag("tx_account_suggestion_${item.accountId}"),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                Text(
+                                    text = item.accountName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (isSelected) accentColor else LedgerTextPrimary,
+                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = item.groupName,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = LedgerTextMuted,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                             Text(
-                                text = item.accountName,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = if (isSelected) accentColor else LedgerTextPrimary,
-                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = item.groupName,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = LedgerTextMuted,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                text = LedgerFormatters.formatSignedWhole(item.balance, symbol),
+                                style = TabularAmountStyle.copy(fontSize = 12.sp),
+                                color = if (item.balance.roundToLong() < 0L) LedgerCoral else LedgerBlue
                             )
                         }
-                        Text(
-                            text = LedgerFormatters.formatSignedWhole(item.balance, symbol),
-                            style = TabularAmountStyle.copy(fontSize = 12.sp),
-                            color = if (item.balance.roundToLong() < 0L) LedgerCoral else LedgerBlue
-                        )
-                    }
-                    if (idx < suggestions.lastIndex) {
-                        HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                        if (idx < suggestions.lastIndex) {
+                            HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                        }
                     }
                 }
             }
@@ -2162,52 +2756,60 @@ private fun CategorySuggestionList(
     Surface(
         shape = RoundedCornerShape(10.dp),
         color = LedgerSurfaceElevated,
-        border = BorderStroke(1.dp, LedgerBorder),
+        tonalElevation = 6.dp,
+        shadowElevation = 10.dp,
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.35f)),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 78.dp, top = 4.dp, bottom = 6.dp)
             .testTag("tx_category_suggestions_list")
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            if (suggestions.isEmpty()) {
-                Text(
-                    text = "No matching ${kindLabel.lowercase()} ledgers found",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = LedgerTextMuted,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
-                )
-            } else {
-                suggestions.forEachIndexed { idx, item ->
-                    val isSelected = item.categoryId == selectedCategoryId &&
-                        item.subcategory.orEmpty() == selectedSubcategory
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(if (isSelected) accentColor.copy(alpha = 0.14f) else Color.Transparent)
-                            .clickable { onSelect(item) }
-                            .padding(horizontal = 12.dp, vertical = 10.dp)
-                            .testTag("tx_category_suggestion_${item.categoryId}_${item.subcategory.orEmpty()}"),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 200.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                if (suggestions.isEmpty()) {
+                    Text(
+                        text = "No matching ${kindLabel.lowercase()} ledgers found",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = LedgerTextMuted,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                    )
+                } else {
+                    suggestions.forEachIndexed { idx, item ->
+                        val isSelected = item.categoryId == selectedCategoryId &&
+                            item.subcategory.orEmpty() == selectedSubcategory
+                        Row(
                             modifier = Modifier
-                                .size(9.dp)
-                                .clip(RoundedCornerShape(3.dp))
-                                .background(LedgerFormatters.parseColorHex(item.colorHex))
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = item.displayLabel,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (isSelected) accentColor else LedgerTextPrimary,
-                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    if (idx < suggestions.lastIndex) {
-                        HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                                .fillMaxWidth()
+                                .background(if (isSelected) accentColor.copy(alpha = 0.14f) else Color.Transparent)
+                                .clickable { onSelect(item) }
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                                .testTag("tx_category_suggestion_${item.categoryId}_${item.subcategory.orEmpty()}"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(9.dp)
+                                    .clip(RoundedCornerShape(3.dp))
+                                    .background(LedgerFormatters.parseColorHex(item.colorHex))
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = item.displayLabel,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (isSelected) accentColor else LedgerTextPrimary,
+                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        if (idx < suggestions.lastIndex) {
+                            HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                        }
                     }
                 }
             }
@@ -2266,6 +2868,68 @@ private fun CategorySuggestionList(
                     tint = LedgerTextSecondary,
                     modifier = Modifier.size(16.dp)
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TextSuggestionList(
+    suggestions: List<TextSuggestionItem>,
+    currentValue: String,
+    accentColor: Color,
+    listTestTag: String,
+    itemTestTagPrefix: String,
+    onSelect: (TextSuggestionItem) -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = LedgerSurfaceElevated,
+        tonalElevation = 6.dp,
+        shadowElevation = 10.dp,
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.35f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(listTestTag)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 200.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            suggestions.forEachIndexed { idx, item ->
+                val isExact = item.text.equals(currentValue.trim(), ignoreCase = true)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(if (isExact) accentColor.copy(alpha = 0.14f) else Color.Transparent)
+                        .clickable { onSelect(item) }
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                        .testTag("$itemTestTagPrefix$idx"),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = item.text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (isExact) accentColor else LedgerTextPrimary,
+                        fontWeight = if (isExact) FontWeight.SemiBold else FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(end = 8.dp)
+                    )
+                    if (item.usageCount > 1) {
+                        Text(
+                            text = "${item.usageCount}×",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = LedgerTextMuted
+                        )
+                    }
+                }
+                if (idx < suggestions.lastIndex) {
+                    HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                }
             }
         }
     }

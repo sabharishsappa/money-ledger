@@ -1,6 +1,7 @@
 package com.example.data
 
 import androidx.annotation.Keep
+import androidx.compose.runtime.Immutable
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentId
 import com.google.firebase.firestore.FieldValue
@@ -116,9 +117,8 @@ enum class RepeatFrequency(
 
 enum class MainTab(val label: String) {
     TRANSACTIONS("Trans."),
-    STATS("Stats"),
-    REPORTS("Reports"),
     ACCOUNTS("Accounts"),
+    REPORTS("Reports"),
     MORE("More")
 }
 
@@ -143,6 +143,7 @@ enum class StatsPeriodType(val label: String) {
 }
 
 @Keep
+@Immutable
 @IgnoreExtraProperties
 data class UserSettings(
     @DocumentId val id: String = "",
@@ -172,6 +173,7 @@ data class UserSettings(
 }
 
 @Keep
+@Immutable
 @IgnoreExtraProperties
 data class AccountGroup(
     @DocumentId val id: String = "",
@@ -197,6 +199,7 @@ data class AccountGroup(
 }
 
 @Keep
+@Immutable
 @IgnoreExtraProperties
 data class Account(
     @DocumentId val id: String = "",
@@ -234,6 +237,7 @@ data class Account(
 }
 
 @Keep
+@Immutable
 @IgnoreExtraProperties
 data class Category(
     @DocumentId val id: String = "",
@@ -261,6 +265,7 @@ data class Category(
 }
 
 @Keep
+@Immutable
 @IgnoreExtraProperties
 data class LedgerTransaction(
     @DocumentId val id: String = "",
@@ -319,6 +324,7 @@ data class LedgerTransaction(
 }
 
 @Keep
+@Immutable
 @IgnoreExtraProperties
 data class Budget(
     @DocumentId val id: String = "",
@@ -338,6 +344,7 @@ data class Budget(
 }
 
 @Keep
+@Immutable
 @IgnoreExtraProperties
 data class FinanceNote(
     @DocumentId val id: String = "",

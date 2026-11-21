@@ -1,6 +1,14 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
@@ -8,6 +16,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -15,6 +24,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -59,6 +69,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -83,6 +94,7 @@ import com.example.ui.theme.LedgerTextMuted
 import com.example.ui.theme.LedgerTextPrimary
 import com.example.ui.theme.LedgerTextSecondary
 import com.example.ui.theme.TabularAmountStyle
+import com.example.util.IndianNumberVisualTransformation
 import com.example.util.LedgerFormatters
 import com.example.viewmodel.AccountWithBalance
 import com.example.viewmodel.LedgerDataBundle
@@ -90,9 +102,11 @@ import com.example.viewmodel.LedgerViewModel
 import kotlin.math.abs
 import kotlin.math.roundToLong
 
-private val ACCOUNT_NAME_COL_WIDTH = 148.dp
-private val TAGGING_COL_WIDTH = 104.dp
-private val TOTAL_COL_WIDTH = 114.dp
+private data class AccountsTableWidths(
+    val nameColWidth: Dp,
+    val tagColWidth: Dp,
+    val totalColWidth: Dp
+)
 
 private data class NatureGroupSection(
     val nature: AccountNature,
@@ -277,13 +291,13 @@ fun AccountsScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(LedgerSurface)
-                .padding(vertical = 10.dp, horizontal = 8.dp),
+                .padding(vertical = 8.dp, horizontal = 8.dp),
             horizontalArrangement = Arrangement.SpaceEvenly
         ) {
             SummaryMetricColumn(
                 label = "Assets",
                 value = LedgerFormatters.formatWholeAmount(bundle.totalAssets, symbol, includeSymbol = false),
-                valueColor = LedgerBlue,
+                valueColor = if (bundle.totalAssets.roundToLong() < 0L) LedgerCoral else LedgerBlue,
                 modifier = Modifier.weight(1f)
             )
             SummaryMetricColumn(
@@ -295,30 +309,41 @@ fun AccountsScreen(
             SummaryMetricColumn(
                 label = "Total",
                 value = LedgerFormatters.formatWholeAmount(bundle.netTotal, symbol, includeSymbol = false),
-                valueColor = LedgerTextPrimary,
+                valueColor = if (bundle.netTotal.roundToLong() < 0L) LedgerCoral else LedgerTextPrimary,
                 modifier = Modifier.weight(1f)
             )
         }
 
-        if (showSummaryBreakdown) {
+        AnimatedVisibility(
+            visible = showSummaryBreakdown,
+            enter = expandVertically(tween(200, easing = FastOutSlowInEasing)) + fadeIn(tween(160)),
+            exit = shrinkVertically(tween(160, easing = FastOutSlowInEasing)) + fadeOut(tween(120))
+        ) {
             val posAssets = bundle.totalAssets.coerceAtLeast(0.0)
             val posLiabilities = bundle.totalLiabilities.coerceAtLeast(0.0)
             val totalMagnitude = (posAssets + posLiabilities).coerceAtLeast(1.0)
-            val assetFraction = (posAssets / totalMagnitude).toFloat().coerceIn(0f, 1f)
+            val targetAssetFraction = (posAssets / totalMagnitude).toFloat().coerceIn(0f, 1f)
+            val animatedAssetFraction by animateFloatAsState(
+                targetValue = targetAssetFraction,
+                animationSpec = tween(320, easing = FastOutSlowInEasing),
+                label = "accounts_asset_ratio"
+            )
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(LedgerSurfaceElevated)
-                    .padding(horizontal = 16.dp, vertical = 10.dp)
+                    .padding(horizontal = 14.dp, vertical = 9.dp)
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().height(8.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(8.dp)
                         .background(LedgerCoral, RoundedCornerShape(4.dp))
                 ) {
-                    if (assetFraction > 0f) {
+                    if (animatedAssetFraction > 0.005f) {
                         Box(
                             modifier = Modifier
-                                .fillMaxWidth(assetFraction)
+                                .fillMaxWidth(animatedAssetFraction)
                                 .height(8.dp)
                                 .background(LedgerBlue, RoundedCornerShape(4.dp))
                         )
@@ -327,12 +352,12 @@ fun AccountsScreen(
                 Spacer(modifier = Modifier.height(6.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(
-                        text = "Assets ${(assetFraction * 100).toInt()}%",
+                        text = "Assets ${(targetAssetFraction * 100).toInt()}%",
                         style = MaterialTheme.typography.labelSmall,
                         color = LedgerBlue
                     )
                     Text(
-                        text = "Liabilities ${((1f - assetFraction) * 100).toInt()}%",
+                        text = "Liabilities ${((1f - targetAssetFraction) * 100).toInt()}%",
                         style = MaterialTheme.typography.labelSmall,
                         color = LedgerCoral
                     )
@@ -373,301 +398,354 @@ fun AccountsScreen(
                 }
             }
         } else {
-            // Sticky Column Header + Tagging-Wise Totals Row on Top
-            if (showTagSplitColumns) {
-                TagSplitHeaderRow(
-                    taggings = taggings,
-                    includeUntagged = includeUntaggedCol,
-                    scrollState = sharedHScroll
-                )
-                HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
-                TagSplitDataRow(
-                    label = "Total",
-                    subtitle = "Tagging-wise",
-                    taggings = taggings,
-                    tagValues = bundle.grandTagTotals,
-                    includeUntagged = includeUntaggedCol,
-                    untaggedValue = bundle.grandUntaggedTotal,
-                    totalValue = bundle.netTotal,
-                    symbol = symbol,
-                    scrollState = sharedHScroll,
-                    rowBackground = LedgerSurfaceHighlight.copy(alpha = 0.55f),
-                    rowTier = AccountRowTier.GRAND_TOTAL,
-                    modifier = Modifier.testTag("accounts_grand_total_row"),
-                    onClick = null
-                )
-                HorizontalDivider(color = LedgerBorder, thickness = 1.dp)
-            }
+            BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                val baseNameW = (maxWidth * 0.39f).coerceIn(124.dp, 210.dp)
+                val availRightW = (maxWidth - baseNameW - 1.dp).coerceAtLeast(160.dp)
+                val tagColCount = taggings.size + if (includeUntaggedCol) 1 else 0
+                val minTagW = (maxWidth * 0.24f).coerceIn(88.dp, 124.dp)
+                val minTotalW = (maxWidth * 0.27f).coerceIn(96.dp, 134.dp)
+                val naturalRightW = minTagW * tagColCount + minTotalW
+                val widths = if (showTagSplitColumns && naturalRightW < availRightW && tagColCount > 0) {
+                    val scale = (availRightW.value / naturalRightW.value)
+                    AccountsTableWidths(
+                        nameColWidth = baseNameW,
+                        tagColWidth = (minTagW.value * scale).dp,
+                        totalColWidth = (minTotalW.value * scale).dp
+                    )
+                } else {
+                    AccountsTableWidths(
+                        nameColWidth = baseNameW,
+                        tagColWidth = minTagW,
+                        totalColWidth = minTotalW
+                    )
+                }
 
-            LazyColumn(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = PaddingValues(bottom = 24.dp)
-            ) {
-                natureSections.forEach { natureSection ->
-                    val isNatureExpanded = natureSection.nature !in collapsedNatures
-                    val accentColor = if (natureSection.nature == AccountNature.ASSET) LedgerBlue else LedgerCoral
-                    val toggleNature = {
-                        collapsedNatures = if (isNatureExpanded) {
-                            collapsedNatures + natureSection.nature
-                        } else {
-                            collapsedNatures - natureSection.nature
-                        }
+                Column(modifier = Modifier.fillMaxSize()) {
+                    // Sticky Column Header + Tagging-Wise Totals Row on Top
+                    if (showTagSplitColumns) {
+                        TagSplitHeaderRow(
+                            taggings = taggings,
+                            includeUntagged = includeUntaggedCol,
+                            scrollState = sharedHScroll,
+                            widths = widths
+                        )
+                        HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                        TagSplitDataRow(
+                            label = "Total",
+                            subtitle = "Tagging-wise",
+                            taggings = taggings,
+                            tagValues = bundle.grandTagTotals,
+                            includeUntagged = includeUntaggedCol,
+                            untaggedValue = bundle.grandUntaggedTotal,
+                            totalValue = bundle.netTotal,
+                            symbol = symbol,
+                            scrollState = sharedHScroll,
+                            widths = widths,
+                            rowBackground = LedgerSurfaceHighlight.copy(alpha = 0.55f),
+                            rowTier = AccountRowTier.GRAND_TOTAL,
+                            modifier = Modifier.testTag("accounts_grand_total_row"),
+                            onClick = null
+                        )
+                        HorizontalDivider(color = LedgerBorder, thickness = 1.dp)
                     }
 
-                    // Level 1: Assets / Liabilities Top Group Header
-                    item(key = "nature_hdr_${natureSection.nature.name}") {
-                        val groupCountText = if (natureSection.sections.size == 1) "1 group" else "${natureSection.sections.size} groups"
-                        if (showTagSplitColumns) {
-                            TagSplitDataRow(
-                                label = natureSection.title,
-                                subtitle = groupCountText,
-                                taggings = taggings,
-                                tagValues = natureSection.tagSubtotals,
-                                includeUntagged = includeUntaggedCol,
-                                untaggedValue = natureSection.untaggedSubtotal,
-                                totalValue = natureSection.subtotal,
-                                symbol = symbol,
-                                scrollState = sharedHScroll,
-                                rowBackground = LedgerSurfaceElevated,
-                                rowTier = AccountRowTier.NATURE_HEADER,
-                                isExpanded = isNatureExpanded,
-                                accentColor = accentColor,
-                                modifier = Modifier.testTag("account_nature_header_${natureSection.nature.name.lowercase()}"),
-                                onClick = toggleNature
-                            )
-                        } else {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(LedgerSurfaceElevated)
-                                    .clickable(onClick = toggleNature)
-                                    .padding(start = 10.dp, end = 16.dp, top = 11.dp, bottom = 11.dp)
-                                    .testTag("account_nature_header_${natureSection.nature.name.lowercase()}"),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.weight(1f).padding(end = 10.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .width(3.dp)
-                                            .height(22.dp)
-                                            .background(accentColor, RoundedCornerShape(2.dp))
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Icon(
-                                        imageVector = if (isNatureExpanded) {
-                                            Icons.Filled.KeyboardArrowDown
-                                        } else {
-                                            Icons.AutoMirrored.Filled.KeyboardArrowRight
-                                        },
-                                        contentDescription = if (isNatureExpanded) "Collapse ${natureSection.title}" else "Expand ${natureSection.title}",
-                                        tint = accentColor,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Column {
-                                        Text(
-                                            text = natureSection.title,
-                                            style = MaterialTheme.typography.titleSmall,
-                                            color = LedgerTextPrimary,
-                                            fontWeight = FontWeight.Bold,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = groupCountText,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = LedgerTextMuted
-                                        )
-                                    }
-                                }
-                                Text(
-                                    text = LedgerFormatters.formatSignedWhole(natureSection.subtotal, symbol),
-                                    style = TabularAmountStyle.copy(fontSize = 15.sp, fontWeight = FontWeight.Bold),
-                                    color = if (natureSection.subtotal.roundToLong() < 0L) LedgerCoral else LedgerBlue
-                                )
-                            }
-                        }
-                        HorizontalDivider(color = LedgerDivider, thickness = 1.dp)
-                    }
-
-                    // Level 2: Account Groups (Bank Accounts, Cash, Credit Cards, Loans, etc.)
-                    if (isNatureExpanded) {
-                        natureSection.sections.forEach { section ->
-                            val isGroupExpanded = section.group.id in expandedGroupIds
-                            val ledgerCountText = if (section.accounts.size == 1) "1 ledger" else "${section.accounts.size} ledgers"
-                            val toggleGroup = {
-                                expandedGroupIds = if (isGroupExpanded) {
-                                    expandedGroupIds - section.group.id
+                    LazyColumn(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentPadding = PaddingValues(bottom = 24.dp)
+                    ) {
+                        natureSections.forEach { natureSection ->
+                            val isNatureExpanded = natureSection.nature !in collapsedNatures
+                            val accentColor = if (natureSection.nature == AccountNature.ASSET) LedgerBlue else LedgerCoral
+                            val toggleNature = {
+                                collapsedNatures = if (isNatureExpanded) {
+                                    collapsedNatures + natureSection.nature
                                 } else {
-                                    expandedGroupIds + section.group.id
+                                    collapsedNatures - natureSection.nature
                                 }
                             }
 
-                            item(key = "grp_hdr_${section.group.id}") {
-                                if (showTagSplitColumns) {
-                                    TagSplitDataRow(
-                                        label = section.group.name,
-                                        subtitle = ledgerCountText,
-                                        taggings = taggings,
-                                        tagValues = section.tagSubtotals,
-                                        includeUntagged = includeUntaggedCol,
-                                        untaggedValue = section.untaggedSubtotal,
-                                        totalValue = section.subtotal,
-                                        symbol = symbol,
-                                        scrollState = sharedHScroll,
-                                        rowBackground = LedgerSurface,
-                                        rowTier = AccountRowTier.ACCOUNT_GROUP,
-                                        isExpanded = isGroupExpanded,
-                                        modifier = Modifier.testTag("account_group_header_${section.group.id}"),
-                                        onClick = toggleGroup
-                                    )
-                                } else {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .background(LedgerSurface)
-                                            .clickable(onClick = toggleGroup)
-                                            .padding(start = 12.dp, end = 16.dp, top = 12.dp, bottom = 12.dp)
-                                            .testTag("account_group_header_${section.group.id}"),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.weight(1f).padding(end = 10.dp)
-                                        ) {
-                                            Surface(
-                                                onClick = toggleGroup,
-                                                shape = RoundedCornerShape(6.dp),
-                                                color = if (isGroupExpanded) LedgerSurfaceHighlight else LedgerSurfaceElevated,
-                                                border = BorderStroke(0.5.dp, LedgerBorder),
-                                                modifier = Modifier
-                                                    .size(28.dp)
-                                                    .testTag("account_group_expand_${section.group.id}")
-                                            ) {
-                                                Box(contentAlignment = Alignment.Center) {
-                                                    Icon(
-                                                        imageVector = if (isGroupExpanded) {
-                                                            Icons.Filled.KeyboardArrowDown
-                                                        } else {
-                                                            Icons.AutoMirrored.Filled.KeyboardArrowRight
-                                                        },
-                                                        contentDescription = if (isGroupExpanded) {
-                                                            "Collapse ${section.group.name}"
-                                                        } else {
-                                                            "Expand ${section.group.name}"
-                                                        },
-                                                        tint = if (isGroupExpanded) LedgerTextPrimary else LedgerTextSecondary,
-                                                        modifier = Modifier.size(18.dp)
-                                                    )
-                                                }
-                                            }
-                                            Spacer(modifier = Modifier.width(10.dp))
-                                            Column {
-                                                Text(
-                                                    text = section.group.name,
-                                                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
-                                                    color = LedgerTextPrimary,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                                Text(
-                                                    text = ledgerCountText,
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = LedgerTextMuted
-                                                )
-                                            }
-                                        }
-                                        Text(
-                                            text = LedgerFormatters.formatSignedWhole(section.subtotal, symbol),
-                                            style = TabularAmountStyle.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
-                                            color = if (section.subtotal.roundToLong() < 0L) LedgerCoral else LedgerBlue
-                                        )
-                                    }
-                                }
-                                HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
-                            }
-
-                            // Level 3: Individual Ledgers (Hidden by default; revealed only when group is expanded)
-                            if (isGroupExpanded) {
-                                items(section.accounts, key = { it.account.id }) { item: AccountWithBalance ->
-                                    val accountSubtitle = buildString {
-                                        if (!item.account.includeInNetWorth) append("Excl. Net Worth")
-                                        if (!item.account.note.isNullOrBlank()) {
-                                            if (isNotEmpty()) append(" • ")
-                                            append(item.account.note)
-                                        }
-                                    }.takeIf { it.isNotEmpty() }
-
+                            // Level 1: Assets / Liabilities Top Group Header
+                            item(key = "nature_hdr_${natureSection.nature.name}", contentType = "nature_hdr") {
+                                val groupCountText = if (natureSection.sections.size == 1) "1 group" else "${natureSection.sections.size} groups"
+                                Column(modifier = Modifier.animateItem()) {
                                     if (showTagSplitColumns) {
                                         TagSplitDataRow(
-                                            label = item.account.name,
-                                            subtitle = accountSubtitle,
+                                            label = natureSection.title,
+                                            subtitle = groupCountText,
                                             taggings = taggings,
-                                            tagValues = item.tagBalances,
+                                            tagValues = natureSection.tagSubtotals,
                                             includeUntagged = includeUntaggedCol,
-                                            untaggedValue = item.untaggedBalance,
-                                            totalValue = item.balance,
+                                            untaggedValue = natureSection.untaggedSubtotal,
+                                            totalValue = natureSection.subtotal,
                                             symbol = symbol,
                                             scrollState = sharedHScroll,
-                                            rowBackground = LedgerBackground,
-                                            rowTier = AccountRowTier.LEDGER_ITEM,
-                                            modifier = Modifier.testTag("account_row_${item.account.id}"),
-                                            onClick = { onSelectAccount(item.account) }
+                                            widths = widths,
+                                            rowBackground = LedgerSurfaceElevated,
+                                            rowTier = AccountRowTier.NATURE_HEADER,
+                                            isExpanded = isNatureExpanded,
+                                            accentColor = accentColor,
+                                            modifier = Modifier.testTag("account_nature_header_${natureSection.nature.name.lowercase()}"),
+                                            onClick = toggleNature
                                         )
                                     } else {
+                                        val chevronRot by animateFloatAsState(
+                                            targetValue = if (isNatureExpanded) 90f else 0f,
+                                            animationSpec = tween(180),
+                                            label = "nature_chevron_${natureSection.nature.name}"
+                                        )
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .background(LedgerBackground)
-                                                .clickable { onSelectAccount(item.account) }
-                                                .padding(start = 42.dp, end = 16.dp, top = 12.dp, bottom = 12.dp)
-                                                .testTag("account_row_${item.account.id}"),
+                                                .heightIn(min = 48.dp)
+                                                .background(LedgerSurfaceElevated)
+                                                .clickable(onClick = toggleNature)
+                                                .padding(start = 10.dp, end = 14.dp, top = 10.dp, bottom = 10.dp)
+                                                .testTag("account_nature_header_${natureSection.nature.name.lowercase()}"),
                                             horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Row(
                                                 verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier.weight(1f).padding(end = 12.dp)
+                                                modifier = Modifier.weight(1f).padding(end = 10.dp)
                                             ) {
                                                 Box(
                                                     modifier = Modifier
-                                                        .width(2.dp)
-                                                        .height(18.dp)
-                                                        .background(LedgerDivider)
+                                                        .width(3.dp)
+                                                        .height(20.dp)
+                                                        .background(accentColor, RoundedCornerShape(2.dp))
                                                 )
-                                                Spacer(modifier = Modifier.width(10.dp))
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Icon(
+                                                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                                    contentDescription = if (isNatureExpanded) "Collapse ${natureSection.title}" else "Expand ${natureSection.title}",
+                                                    tint = accentColor,
+                                                    modifier = Modifier.size(20.dp).rotate(chevronRot)
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
                                                 Column {
                                                     Text(
-                                                        text = item.account.name,
-                                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                                                        color = LedgerTextSecondary,
+                                                        text = natureSection.title,
+                                                        style = MaterialTheme.typography.titleSmall,
+                                                        color = LedgerTextPrimary,
+                                                        fontWeight = FontWeight.Bold,
                                                         maxLines = 1,
                                                         overflow = TextOverflow.Ellipsis
                                                     )
-                                                    if (accountSubtitle != null) {
-                                                        Text(
-                                                            text = accountSubtitle,
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            color = LedgerTextMuted,
-                                                            maxLines = 1,
-                                                            overflow = TextOverflow.Ellipsis
-                                                        )
-                                                    }
+                                                    Text(
+                                                        text = groupCountText,
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = LedgerTextMuted
+                                                    )
                                                 }
                                             }
                                             Text(
-                                                text = LedgerFormatters.formatSignedWhole(item.balance, symbol),
-                                                style = TabularAmountStyle.copy(fontSize = 13.5.sp),
-                                                color = if (item.balance.roundToLong() < 0L) LedgerCoral else LedgerBlue
+                                                text = LedgerFormatters.formatSignedWhole(natureSection.subtotal, symbol),
+                                                style = TabularAmountStyle.copy(fontSize = 14.5.sp, fontWeight = FontWeight.Bold),
+                                                color = if (natureSection.subtotal.roundToLong() < 0L) LedgerCoral else LedgerBlue,
+                                                maxLines = 1,
+                                                softWrap = false
                                             )
                                         }
                                     }
-                                    HorizontalDivider(color = LedgerDivider.copy(alpha = 0.6f), thickness = 0.5.dp)
+                                    HorizontalDivider(color = LedgerDivider, thickness = 1.dp)
+                                }
+                            }
+
+                            // Level 2: Account Groups (Bank Accounts, Cash, Credit Cards, Loans, etc.)
+                            if (isNatureExpanded) {
+                                natureSection.sections.forEach { section ->
+                                    val isGroupExpanded = section.group.id in expandedGroupIds
+                                    val ledgerCountText = if (section.accounts.size == 1) "1 ledger" else "${section.accounts.size} ledgers"
+                                    val toggleGroup = {
+                                        expandedGroupIds = if (isGroupExpanded) {
+                                            expandedGroupIds - section.group.id
+                                        } else {
+                                            expandedGroupIds + section.group.id
+                                        }
+                                    }
+
+                                    item(key = "grp_hdr_${section.group.id}", contentType = "group_hdr") {
+                                        Column(modifier = Modifier.animateItem()) {
+                                            if (showTagSplitColumns) {
+                                                TagSplitDataRow(
+                                                    label = section.group.name,
+                                                    subtitle = ledgerCountText,
+                                                    taggings = taggings,
+                                                    tagValues = section.tagSubtotals,
+                                                    includeUntagged = includeUntaggedCol,
+                                                    untaggedValue = section.untaggedSubtotal,
+                                                    totalValue = section.subtotal,
+                                                    symbol = symbol,
+                                                    scrollState = sharedHScroll,
+                                                    widths = widths,
+                                                    rowBackground = LedgerSurface,
+                                                    rowTier = AccountRowTier.ACCOUNT_GROUP,
+                                                    isExpanded = isGroupExpanded,
+                                                    modifier = Modifier.testTag("account_group_header_${section.group.id}"),
+                                                    onClick = toggleGroup
+                                                )
+                                            } else {
+                                                val groupChevronRot by animateFloatAsState(
+                                                    targetValue = if (isGroupExpanded) 90f else 0f,
+                                                    animationSpec = tween(180),
+                                                    label = "grp_chevron_${section.group.id}"
+                                                )
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .heightIn(min = 48.dp)
+                                                        .background(LedgerSurface)
+                                                        .clickable(onClick = toggleGroup)
+                                                        .padding(start = 12.dp, end = 14.dp, top = 10.dp, bottom = 10.dp)
+                                                        .testTag("account_group_header_${section.group.id}"),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        modifier = Modifier.weight(1f).padding(end = 10.dp)
+                                                    ) {
+                                                        Surface(
+                                                            onClick = toggleGroup,
+                                                            shape = RoundedCornerShape(6.dp),
+                                                            color = if (isGroupExpanded) LedgerSurfaceHighlight else LedgerSurfaceElevated,
+                                                            border = BorderStroke(0.5.dp, LedgerBorder),
+                                                            modifier = Modifier
+                                                                .size(28.dp)
+                                                                .testTag("account_group_expand_${section.group.id}")
+                                                        ) {
+                                                            Box(contentAlignment = Alignment.Center) {
+                                                                Icon(
+                                                                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                                                    contentDescription = if (isGroupExpanded) {
+                                                                        "Collapse ${section.group.name}"
+                                                                    } else {
+                                                                        "Expand ${section.group.name}"
+                                                                    },
+                                                                    tint = if (isGroupExpanded) LedgerTextPrimary else LedgerTextSecondary,
+                                                                    modifier = Modifier.size(18.dp).rotate(groupChevronRot)
+                                                                )
+                                                            }
+                                                        }
+                                                        Spacer(modifier = Modifier.width(10.dp))
+                                                        Column {
+                                                            Text(
+                                                                text = section.group.name,
+                                                                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
+                                                                color = LedgerTextPrimary,
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis
+                                                            )
+                                                            Text(
+                                                                text = ledgerCountText,
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                color = LedgerTextMuted
+                                                            )
+                                                        }
+                                                    }
+                                                    Text(
+                                                        text = LedgerFormatters.formatSignedWhole(section.subtotal, symbol),
+                                                        style = TabularAmountStyle.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
+                                                        color = if (section.subtotal.roundToLong() < 0L) LedgerCoral else LedgerBlue,
+                                                        maxLines = 1,
+                                                        softWrap = false
+                                                    )
+                                                }
+                                            }
+                                            HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                                        }
+                                    }
+
+                                    // Level 3: Individual Ledgers (Hidden by default; revealed only when group is expanded)
+                                    if (isGroupExpanded) {
+                                        items(
+                                            items = section.accounts,
+                                            key = { it.account.id },
+                                            contentType = { "ledger_item" }
+                                        ) { item: AccountWithBalance ->
+                                            val accountSubtitle = remember(item.account.includeInNetWorth, item.account.note) {
+                                                buildString {
+                                                    if (!item.account.includeInNetWorth) append("Excl. Net Worth")
+                                                    if (!item.account.note.isNullOrBlank()) {
+                                                        if (isNotEmpty()) append(" • ")
+                                                        append(item.account.note)
+                                                    }
+                                                }.takeIf { it.isNotEmpty() }
+                                            }
+
+                                            Column(modifier = Modifier.animateItem()) {
+                                                if (showTagSplitColumns) {
+                                                    TagSplitDataRow(
+                                                        label = item.account.name,
+                                                        subtitle = accountSubtitle,
+                                                        taggings = taggings,
+                                                        tagValues = item.tagBalances,
+                                                        includeUntagged = includeUntaggedCol,
+                                                        untaggedValue = item.untaggedBalance,
+                                                        totalValue = item.balance,
+                                                        symbol = symbol,
+                                                        scrollState = sharedHScroll,
+                                                        widths = widths,
+                                                        rowBackground = LedgerBackground,
+                                                        rowTier = AccountRowTier.LEDGER_ITEM,
+                                                        modifier = Modifier.testTag("account_row_${item.account.id}"),
+                                                        onClick = { onSelectAccount(item.account) }
+                                                    )
+                                                } else {
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .heightIn(min = 48.dp)
+                                                            .background(LedgerBackground)
+                                                            .clickable { onSelectAccount(item.account) }
+                                                            .padding(start = 38.dp, end = 14.dp, top = 10.dp, bottom = 10.dp)
+                                                            .testTag("account_row_${item.account.id}"),
+                                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Row(
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            modifier = Modifier.weight(1f).padding(end = 10.dp)
+                                                        ) {
+                                                            Box(
+                                                                modifier = Modifier
+                                                                    .width(2.dp)
+                                                                    .height(16.dp)
+                                                                    .background(LedgerDivider)
+                                                            )
+                                                            Spacer(modifier = Modifier.width(10.dp))
+                                                            Column {
+                                                                Text(
+                                                                    text = item.account.name,
+                                                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                                                                    color = LedgerTextSecondary,
+                                                                    maxLines = 1,
+                                                                    overflow = TextOverflow.Ellipsis
+                                                                )
+                                                                if (accountSubtitle != null) {
+                                                                    Text(
+                                                                        text = accountSubtitle,
+                                                                        style = MaterialTheme.typography.labelSmall,
+                                                                        color = LedgerTextMuted,
+                                                                        maxLines = 1,
+                                                                        overflow = TextOverflow.Ellipsis
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+                                                        Text(
+                                                            text = LedgerFormatters.formatSignedWhole(item.balance, symbol),
+                                                            style = TabularAmountStyle.copy(fontSize = 13.5.sp),
+                                                            color = if (item.balance.roundToLong() < 0L) LedgerCoral else LedgerBlue,
+                                                            maxLines = 1,
+                                                            softWrap = false
+                                                        )
+                                                    }
+                                                }
+                                                HorizontalDivider(color = LedgerDivider.copy(alpha = 0.6f), thickness = 0.5.dp)
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -710,7 +788,8 @@ private enum class AccountRowTier {
 private fun TagSplitHeaderRow(
     taggings: List<String>,
     includeUntagged: Boolean,
-    scrollState: ScrollState
+    scrollState: ScrollState,
+    widths: AccountsTableWidths
 ) {
     Row(
         modifier = Modifier
@@ -727,8 +806,8 @@ private fun TagSplitHeaderRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier
-                .width(ACCOUNT_NAME_COL_WIDTH)
-                .padding(start = 14.dp, end = 8.dp, top = 10.dp, bottom = 10.dp)
+                .width(widths.nameColWidth)
+                .padding(start = 12.dp, end = 6.dp, top = 9.dp, bottom = 9.dp)
         )
         Box(
             modifier = Modifier
@@ -745,20 +824,20 @@ private fun TagSplitHeaderRow(
             taggings.forEach { tag ->
                 HeaderAmountCell(
                     title = tag,
-                    width = TAGGING_COL_WIDTH,
+                    width = widths.tagColWidth,
                     textColor = LedgerTextPrimary
                 )
             }
             if (includeUntagged) {
                 HeaderAmountCell(
                     title = "Untagged",
-                    width = TAGGING_COL_WIDTH,
+                    width = widths.tagColWidth,
                     textColor = LedgerTextSecondary
                 )
             }
             HeaderAmountCell(
                 title = "Total",
-                width = TOTAL_COL_WIDTH,
+                width = widths.totalColWidth,
                 textColor = LedgerCoral,
                 highlight = true
             )
@@ -777,7 +856,7 @@ private fun HeaderAmountCell(
         modifier = Modifier
             .width(width)
             .background(if (highlight) LedgerSurfaceHighlight.copy(alpha = 0.6f) else Color.Transparent)
-            .padding(horizontal = 8.dp, vertical = 10.dp),
+            .padding(horizontal = 8.dp, vertical = 9.dp),
         contentAlignment = Alignment.CenterEnd
     ) {
         Text(
@@ -786,6 +865,7 @@ private fun HeaderAmountCell(
             color = textColor,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
+            softWrap = false,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.End
         )
@@ -803,6 +883,7 @@ private fun TagSplitDataRow(
     totalValue: Double,
     symbol: String,
     scrollState: ScrollState,
+    widths: AccountsTableWidths,
     rowBackground: Color,
     rowTier: AccountRowTier,
     isExpanded: Boolean = false,
@@ -812,22 +893,28 @@ private fun TagSplitDataRow(
 ) {
     val clickMod = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier
     val vPad = when (rowTier) {
-        AccountRowTier.NATURE_HEADER -> 10.dp
-        AccountRowTier.ACCOUNT_GROUP -> 11.dp
-        AccountRowTier.LEDGER_ITEM -> 10.dp
-        AccountRowTier.GRAND_TOTAL -> 12.dp
+        AccountRowTier.NATURE_HEADER -> 9.dp
+        AccountRowTier.ACCOUNT_GROUP -> 10.dp
+        AccountRowTier.LEDGER_ITEM -> 9.dp
+        AccountRowTier.GRAND_TOTAL -> 10.dp
     }
     val startPad = when (rowTier) {
         AccountRowTier.NATURE_HEADER -> 8.dp
         AccountRowTier.ACCOUNT_GROUP -> 10.dp
-        AccountRowTier.LEDGER_ITEM -> 24.dp
-        AccountRowTier.GRAND_TOTAL -> 14.dp
+        AccountRowTier.LEDGER_ITEM -> 22.dp
+        AccountRowTier.GRAND_TOTAL -> 12.dp
     }
     val isBoldAmounts = rowTier == AccountRowTier.NATURE_HEADER || rowTier == AccountRowTier.GRAND_TOTAL
+    val chevronRot by animateFloatAsState(
+        targetValue = if (isExpanded) 90f else 0f,
+        animationSpec = tween(180),
+        label = "tag_row_chevron_$label"
+    )
 
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .heightIn(min = 46.dp)
             .background(rowBackground)
             .then(clickMod),
         verticalAlignment = Alignment.CenterVertically
@@ -835,7 +922,7 @@ private fun TagSplitDataRow(
         // Frozen Left Group / Account Name Column
         Row(
             modifier = Modifier
-                .width(ACCOUNT_NAME_COL_WIDTH)
+                .width(widths.nameColWidth)
                 .padding(start = startPad, end = 6.dp, top = vPad, bottom = vPad),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -844,19 +931,15 @@ private fun TagSplitDataRow(
                     Box(
                         modifier = Modifier
                             .width(3.dp)
-                            .height(20.dp)
+                            .height(18.dp)
                             .background(accentColor, RoundedCornerShape(2.dp))
                     )
                     Spacer(modifier = Modifier.width(5.dp))
                     Icon(
-                        imageVector = if (isExpanded) {
-                            Icons.Filled.KeyboardArrowDown
-                        } else {
-                            Icons.AutoMirrored.Filled.KeyboardArrowRight
-                        },
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                         contentDescription = if (isExpanded) "Collapse $label" else "Expand $label",
                         tint = accentColor,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(16.dp).rotate(chevronRot)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                 }
@@ -870,14 +953,10 @@ private fun TagSplitDataRow(
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
-                                imageVector = if (isExpanded) {
-                                    Icons.Filled.KeyboardArrowDown
-                                } else {
-                                    Icons.AutoMirrored.Filled.KeyboardArrowRight
-                                },
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                                 contentDescription = if (isExpanded) "Collapse $label" else "Expand $label",
                                 tint = if (isExpanded) LedgerTextPrimary else LedgerTextSecondary,
-                                modifier = Modifier.size(15.dp)
+                                modifier = Modifier.size(15.dp).rotate(chevronRot)
                             )
                         }
                     }
@@ -887,10 +966,10 @@ private fun TagSplitDataRow(
                     Box(
                         modifier = Modifier
                             .width(2.dp)
-                            .height(16.dp)
+                            .height(15.dp)
                             .background(LedgerDivider)
                     )
-                    Spacer(modifier = Modifier.width(7.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                 }
                 AccountRowTier.GRAND_TOTAL -> Unit
             }
@@ -942,7 +1021,7 @@ private fun TagSplitDataRow(
                 AmountSplitCell(
                     amount = v,
                     symbol = symbol,
-                    width = TAGGING_COL_WIDTH,
+                    width = widths.tagColWidth,
                     vPad = vPad,
                     isBold = isBoldAmounts,
                     showDashForZero = rowTier != AccountRowTier.GRAND_TOTAL
@@ -952,7 +1031,7 @@ private fun TagSplitDataRow(
                 AmountSplitCell(
                     amount = untaggedValue,
                     symbol = symbol,
-                    width = TAGGING_COL_WIDTH,
+                    width = widths.tagColWidth,
                     vPad = vPad,
                     isBold = isBoldAmounts,
                     showDashForZero = rowTier != AccountRowTier.GRAND_TOTAL
@@ -961,7 +1040,7 @@ private fun TagSplitDataRow(
             AmountSplitCell(
                 amount = totalValue,
                 symbol = symbol,
-                width = TOTAL_COL_WIDTH,
+                width = widths.totalColWidth,
                 vPad = vPad,
                 isBold = rowTier != AccountRowTier.LEDGER_ITEM,
                 showDashForZero = false,
@@ -1010,11 +1089,12 @@ private fun AmountSplitCell(
         Text(
             text = text,
             style = TabularAmountStyle.copy(
-                fontSize = 12.5.sp,
+                fontSize = 12.sp,
                 fontWeight = if (isBold) FontWeight.Bold else FontWeight.Medium
             ),
             color = textColor,
             maxLines = 1,
+            softWrap = false,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.End
         )
@@ -1114,11 +1194,23 @@ fun AccountDetailScreen(
                     color = if (liveBalance.roundToLong() < 0L) LedgerCoral else LedgerBlue
                 )
                 Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = "Opening balance: ${LedgerFormatters.formatSignedWhole(account.initialBalance, symbol)}  •  ${accountTransactions.size} entries",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = LedgerTextMuted
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Opening balance: ",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = LedgerTextMuted
+                    )
+                    Text(
+                        text = LedgerFormatters.formatSignedWhole(account.initialBalance, symbol),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (account.initialBalance.roundToLong() < 0L) LedgerCoral else LedgerTextMuted
+                    )
+                    Text(
+                        text = "  •  ${accountTransactions.size} entries",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = LedgerTextMuted
+                    )
+                }
 
                 if (tagSplits.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(12.dp))
@@ -1312,6 +1404,7 @@ fun AccountEditorDialog(
                     },
                     label = { Text("Opening Balance (negative for liabilities)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    visualTransformation = IndianNumberVisualTransformation,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("account_opening_balance_input")
                 )
