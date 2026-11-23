@@ -13,6 +13,7 @@ import com.example.data.CategoryType
 import com.example.data.FinanceNote
 import com.example.data.LedgerDataSource
 import com.example.data.LedgerTransaction
+import com.example.data.MainAccountGroup
 import com.example.data.ReportPeriodMode
 import com.example.data.StatsPeriodType
 import com.example.data.TransactionType
@@ -55,7 +56,9 @@ data class AccountWithBalance(
     val account: Account,
     val balance: Double,
     val tagBalances: Map<String, Double> = emptyMap(),
-    val untaggedBalance: Double = 0.0
+    val untaggedBalance: Double = 0.0,
+    val secondaryTagBalances: Map<String, Double> = emptyMap(),
+    val secondaryUntaggedBalance: Double = 0.0
 )
 
 @Immutable
@@ -64,7 +67,16 @@ data class AccountGroupSection(
     val accounts: List<AccountWithBalance>,
     val subtotal: Double,
     val tagSubtotals: Map<String, Double> = emptyMap(),
-    val untaggedSubtotal: Double = 0.0
+    val untaggedSubtotal: Double = 0.0,
+    val secondaryTagSubtotals: Map<String, Double> = emptyMap(),
+    val secondaryUntaggedSubtotal: Double = 0.0
+)
+
+@Immutable
+data class MainGroupHierarchy(
+    val mainGroup: MainAccountGroup,
+    val subGroups: List<AccountGroupSection>,
+    val totalLedgerCount: Int
 )
 
 @Immutable
@@ -147,6 +159,7 @@ data class SpendingTrendsData(
 @Immutable
 data class LedgerDataBundle(
     val settings: UserSettings = UserSettings(),
+    val mainGroups: List<MainAccountGroup> = emptyList(),
     val accountGroups: List<AccountGroup> = emptyList(),
     val accounts: List<Account> = emptyList(),
     val categories: List<Category> = emptyList(),
@@ -154,6 +167,46 @@ data class LedgerDataBundle(
     val budgets: List<Budget> = emptyList(),
     val notes: List<FinanceNote> = emptyList()
 ) {
+    val effectiveMainGroups: List<MainAccountGroup> by lazy {
+        if (mainGroups.isNotEmpty()) {
+            mainGroups
+        } else {
+            listOf(
+                MainAccountGroup(
+                    id = MainAccountGroup.DEFAULT_ASSETS_ID,
+                    name = "Assets",
+                    nature = AccountNature.ASSET.name,
+                    sortOrder = 0L
+                ),
+                MainAccountGroup(
+                    id = MainAccountGroup.DEFAULT_LIABILITIES_ID,
+                    name = "Liabilities",
+                    nature = AccountNature.LIABILITY.name,
+                    sortOrder = 1L
+                )
+            )
+        }
+    }
+
+    val activeMainGroups: List<MainAccountGroup> by lazy {
+        effectiveMainGroups.filter { !it.archived }.sortedBy { it.sortOrder }
+    }
+
+    val archivedMainGroups: List<MainAccountGroup> by lazy {
+        mainGroups.filter { it.archived }.sortedBy { it.sortOrder }
+    }
+
+    private val mainGroupsById: Map<String, MainAccountGroup> by lazy {
+        effectiveMainGroups.associateBy { it.id }
+    }
+
+    fun mainGroupById(id: String?): MainAccountGroup? =
+        if (id == null) null else mainGroupsById[id]
+
+    fun mainGroupNameFor(group: AccountGroup): String =
+        mainGroupsById[group.resolvedMainGroupId()]?.name
+            ?: if (group.nature() == AccountNature.LIABILITY) "Liabilities" else "Assets"
+
     val activeGroups: List<AccountGroup> by lazy {
         accountGroups.filter { !it.archived }
     }
@@ -192,6 +245,12 @@ data class LedgerDataBundle(
             .sorted()
     }
 
+    val allSecondaryTaggings: List<String> by lazy {
+        transactions.mapNotNull { it.effectiveSecondaryTagging() }
+            .distinct()
+            .sorted()
+    }
+
     val accountBalances: Map<String, Double> by lazy {
         val map = accounts.associate { it.id to it.initialBalance }.toMutableMap()
         transactions.forEach { tx ->
@@ -213,7 +272,9 @@ data class LedgerDataBundle(
         map
     }
 
-    private val perAccountTagSplits: Pair<Map<String, Map<String, Double>>, Map<String, Double>> by lazy {
+    private fun computeAccountTagSplits(
+        tagSelector: (LedgerTransaction) -> String?
+    ): Pair<Map<String, Map<String, Double>>, Map<String, Double>> {
         val tagged = mutableMapOf<String, MutableMap<String, Double>>()
         val untagged = accounts.associate { it.id to it.initialBalance }.toMutableMap()
 
@@ -227,7 +288,7 @@ data class LedgerDataBundle(
         }
 
         transactions.forEach { tx ->
-            val tagKey = tx.effectiveTagging()
+            val tagKey = tagSelector(tx)
             when (tx.txType()) {
                 TransactionType.INCOME -> addDelta(tx.accountId, tagKey, tx.amount)
                 TransactionType.EXPENSE -> addDelta(tx.accountId, tagKey, -tx.amount)
@@ -240,7 +301,15 @@ data class LedgerDataBundle(
             }
         }
 
-        tagged to untagged
+        return tagged to untagged
+    }
+
+    private val perAccountTagSplits: Pair<Map<String, Map<String, Double>>, Map<String, Double>> by lazy {
+        computeAccountTagSplits { it.effectiveTagging() }
+    }
+
+    private val perAccountSecondaryTagSplits: Pair<Map<String, Map<String, Double>>, Map<String, Double>> by lazy {
+        computeAccountTagSplits { it.effectiveSecondaryTagging() }
     }
 
     val accountTagBalances: Map<String, Map<String, Double>>
@@ -249,35 +318,57 @@ data class LedgerDataBundle(
     val accountUntaggedBalances: Map<String, Double>
         get() = perAccountTagSplits.second
 
+    val accountSecondaryTagBalances: Map<String, Map<String, Double>>
+        get() = perAccountSecondaryTagSplits.first
+
+    val accountSecondaryUntaggedBalances: Map<String, Double>
+        get() = perAccountSecondaryTagSplits.second
+
     val hasAnyUntaggedBalance: Boolean by lazy {
         activeAccounts.any { acc ->
             abs(accountUntaggedBalances[acc.id] ?: 0.0) > 0.004
         }
     }
 
+    val hasAnySecondaryUntaggedBalance: Boolean by lazy {
+        activeAccounts.any { acc ->
+            abs(accountSecondaryUntaggedBalances[acc.id] ?: 0.0) > 0.004
+        }
+    }
+
     val accountSections: List<AccountGroupSection> by lazy {
         val activeByGroup = activeAccounts.groupBy { it.groupId }
         val tags = allTaggings
+        val secTags = allSecondaryTaggings
         activeGroups.map { group ->
             val items = (activeByGroup[group.id] ?: emptyList()).map { acc ->
                 val tMap = accountTagBalances[acc.id].orEmpty()
                 val uBal = accountUntaggedBalances[acc.id] ?: acc.initialBalance
+                val secMap = accountSecondaryTagBalances[acc.id].orEmpty()
+                val secUBal = accountSecondaryUntaggedBalances[acc.id] ?: acc.initialBalance
                 AccountWithBalance(
                     account = acc,
                     balance = accountBalances[acc.id] ?: acc.initialBalance,
                     tagBalances = tMap,
-                    untaggedBalance = uBal
+                    untaggedBalance = uBal,
+                    secondaryTagBalances = secMap,
+                    secondaryUntaggedBalance = secUBal
                 )
             }
             val groupTagSubs = tags.associateWith { tag ->
                 items.sumOf { it.tagBalances[tag] ?: 0.0 }
+            }
+            val groupSecTagSubs = secTags.associateWith { tag ->
+                items.sumOf { it.secondaryTagBalances[tag] ?: 0.0 }
             }
             AccountGroupSection(
                 group = group,
                 accounts = items,
                 subtotal = items.sumOf { it.balance },
                 tagSubtotals = groupTagSubs,
-                untaggedSubtotal = items.sumOf { it.untaggedBalance }
+                untaggedSubtotal = items.sumOf { it.untaggedBalance },
+                secondaryTagSubtotals = groupSecTagSubs,
+                secondaryUntaggedSubtotal = items.sumOf { it.secondaryUntaggedBalance }
             )
         }
     }
@@ -292,8 +383,55 @@ data class LedgerDataBundle(
         activeAccounts.sumOf { acc -> accountUntaggedBalances[acc.id] ?: acc.initialBalance }
     }
 
+    val grandSecondaryTagTotals: Map<String, Double> by lazy {
+        allSecondaryTaggings.associateWith { tag ->
+            activeAccounts.sumOf { acc -> accountSecondaryTagBalances[acc.id]?.get(tag) ?: 0.0 }
+        }
+    }
+
+    val grandSecondaryUntaggedTotal: Double by lazy {
+        activeAccounts.sumOf { acc -> accountSecondaryUntaggedBalances[acc.id] ?: acc.initialBalance }
+    }
+
+    val accountHierarchy: List<MainGroupHierarchy> by lazy {
+        val sectionsByMainId = accountSections.groupBy { it.group.resolvedMainGroupId() }
+        val activeMainIds = activeMainGroups.map { it.id }.toSet()
+        val mapped = activeMainGroups.map { mg ->
+            val subs = sectionsByMainId[mg.id].orEmpty()
+            MainGroupHierarchy(
+                mainGroup = mg,
+                subGroups = subs,
+                totalLedgerCount = subs.sumOf { it.accounts.size }
+            )
+        }
+        // Attach any orphan sub-groups (e.g., if their parent main group was archived) to fallback Assets/Liabilities
+        val orphanSections = accountSections.filter { it.group.resolvedMainGroupId() !in activeMainIds }
+        if (orphanSections.isEmpty()) {
+            mapped
+        } else {
+            val fallbackAssetId = activeMainGroups.firstOrNull { it.accountNature() == AccountNature.ASSET }?.id
+                ?: activeMainGroups.firstOrNull()?.id
+            val fallbackLiabId = activeMainGroups.firstOrNull { it.accountNature() == AccountNature.LIABILITY }?.id
+                ?: fallbackAssetId
+            mapped.map { entry ->
+                val extras = orphanSections.filter { sec ->
+                    val targetId = if (sec.group.nature() == AccountNature.LIABILITY) fallbackLiabId else fallbackAssetId
+                    targetId == entry.mainGroup.id
+                }
+                if (extras.isEmpty()) entry
+                else entry.copy(
+                    subGroups = entry.subGroups + extras,
+                    totalLedgerCount = entry.totalLedgerCount + extras.sumOf { it.accounts.size }
+                )
+            }
+        }
+    }
+
     val groupNatureById: Map<String, AccountNature> by lazy {
-        accountGroups.associate { it.id to it.nature() }
+        accountGroups.associate { grp ->
+            val mgNature = mainGroupsById[grp.resolvedMainGroupId()]?.accountNature()
+            grp.id to (mgNature ?: grp.nature())
+        }
     }
 
     fun natureOf(account: Account): AccountNature =
@@ -329,6 +467,7 @@ data class FilterState(
     val searchQuery: String = "",
     val favoritesOnly: Boolean = false,
     val selectedTagFilter: String? = null,
+    val selectedSecondaryTagFilter: String? = null,
     val statsPeriodType: StatsPeriodType = StatsPeriodType.MONTHLY,
     val statsIsExpenseTab: Boolean = true,
     val statsWeekOffset: Int = 0,
@@ -382,13 +521,15 @@ class LedgerViewModel(
 
     val uiState: StateFlow<UiState<LedgerDataBundle>> = combine(
         baseStream,
+        repository.observeMainGroups(currentUserId),
         repository.observeBudgets(currentUserId),
         repository.observeNotes(currentUserId)
-    ) { bundle, budgets, notes ->
-        val full = bundle.copy(budgets = budgets, notes = notes)
+    ) { bundle, mainGroups, budgets, notes ->
+        val full = bundle.copy(mainGroups = mainGroups, budgets = budgets, notes = notes)
         // Pre-warm core aggregates on Dispatchers.Default so first UI frame never stalls
         full.accountBalances
         full.accountSections
+        full.accountHierarchy
         UiState.Success(full) as UiState<LedgerDataBundle>
     }
         .flowOn(Dispatchers.Default)
@@ -492,6 +633,10 @@ class LedgerViewModel(
         _filterState.value = _filterState.value.copy(selectedTagFilter = tag)
     }
 
+    fun setSecondaryTagFilter(tag: String?) {
+        _filterState.value = _filterState.value.copy(selectedSecondaryTagFilter = tag)
+    }
+
     fun setStatsPeriodType(type: StatsPeriodType) {
         _filterState.value = _filterState.value.copy(statsPeriodType = type)
     }
@@ -521,7 +666,13 @@ class LedgerViewModel(
             if (!sameMonth) return@filter false
             if (filter.favoritesOnly && !tx.favorite) return@filter false
             val txTagging = tx.effectiveTagging()
+            val txSecondaryTagging = tx.effectiveSecondaryTagging()
             if (filter.selectedTagFilter != null && !txTagging.equals(filter.selectedTagFilter, ignoreCase = true)) {
+                return@filter false
+            }
+            if (filter.selectedSecondaryTagFilter != null &&
+                !txSecondaryTagging.equals(filter.selectedSecondaryTagFilter, ignoreCase = true)
+            ) {
                 return@filter false
             }
             if (query.isNotEmpty()) {
@@ -530,6 +681,7 @@ class LedgerViewModel(
                 val destName = tx.toAccountId?.let { bundle.accountName(it).lowercase() }.orEmpty()
                 val match = tx.note.lowercase().contains(query) ||
                     txTagging.orEmpty().lowercase().contains(query) ||
+                    txSecondaryTagging.orEmpty().lowercase().contains(query) ||
                     tx.description.orEmpty().lowercase().contains(query) ||
                     tx.subcategory.orEmpty().lowercase().contains(query) ||
                     catName.contains(query) ||
@@ -1115,6 +1267,7 @@ class LedgerViewModel(
                         subcategory = parsed.subcategory,
                         note = parsed.note,
                         tagging = parsed.tagging,
+                        secondaryTagging = parsed.secondaryTagging,
                         description = parsed.description
                     )
                     repository.saveTransaction(currentUserId, null, tx).getOrThrow()
@@ -1320,24 +1473,51 @@ class LedgerViewModel(
         }
     }
 
+    fun saveMainGroup(
+        existingId: String?,
+        name: String,
+        nature: AccountNature? = null,
+        sortOrder: Long
+    ) {
+        val resolvedNature = nature ?: MainAccountGroup.inferNatureFromName(name)
+        viewModelScope.launch {
+            repository.saveMainGroup(currentUserId, existingId, name, resolvedNature, sortOrder)
+                .onSuccess {
+                    _toastMessage.tryEmit(if (existingId == null) "Main group created" else "Main group updated")
+                }
+                .onFailure { _toastMessage.tryEmit(it.localizedMessage ?: "Failed to save main group") }
+        }
+    }
+
+    fun setMainGroupArchived(mainGroupId: String, archived: Boolean) {
+        viewModelScope.launch {
+            repository.setMainGroupArchived(currentUserId, mainGroupId, archived)
+                .onSuccess { _toastMessage.tryEmit(if (archived) "Main group archived" else "Main group restored") }
+                .onFailure { _toastMessage.tryEmit(it.localizedMessage ?: "Failed to update main group") }
+        }
+    }
+
     fun saveAccountGroup(
         existingId: String?,
         name: String,
         groupType: AccountNature,
-        sortOrder: Long
+        sortOrder: Long,
+        mainGroupId: String = ""
     ) {
         viewModelScope.launch {
-            repository.saveAccountGroup(currentUserId, existingId, name, groupType, sortOrder)
-                .onSuccess { _toastMessage.tryEmit("Account group saved") }
-                .onFailure { _toastMessage.tryEmit(it.localizedMessage ?: "Failed to save group") }
+            repository.saveAccountGroup(currentUserId, existingId, name, groupType, sortOrder, mainGroupId)
+                .onSuccess {
+                    _toastMessage.tryEmit(if (existingId == null) "Sub group created" else "Sub group updated")
+                }
+                .onFailure { _toastMessage.tryEmit(it.localizedMessage ?: "Failed to save sub group") }
         }
     }
 
     fun setAccountGroupArchived(groupId: String, archived: Boolean) {
         viewModelScope.launch {
             repository.setAccountGroupArchived(currentUserId, groupId, archived)
-                .onSuccess { _toastMessage.tryEmit(if (archived) "Group archived" else "Group restored") }
-                .onFailure { _toastMessage.tryEmit(it.localizedMessage ?: "Failed to update group") }
+                .onSuccess { _toastMessage.tryEmit(if (archived) "Sub group archived" else "Sub group restored") }
+                .onFailure { _toastMessage.tryEmit(it.localizedMessage ?: "Failed to update sub group") }
         }
     }
 

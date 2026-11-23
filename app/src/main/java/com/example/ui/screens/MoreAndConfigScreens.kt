@@ -45,8 +45,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.DeleteForever
@@ -54,6 +56,7 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Palette
@@ -63,10 +66,13 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -95,6 +101,7 @@ import com.example.data.AccountNature
 import com.example.data.Category
 import com.example.data.CategoryType
 import com.example.data.LedgerTransaction
+import com.example.data.MainAccountGroup
 import com.example.data.RepeatFrequency
 import com.example.ui.theme.ChartColorHexes
 import com.example.ui.theme.LedgerAmber
@@ -104,21 +111,23 @@ import com.example.ui.theme.LedgerBorder
 import com.example.ui.theme.LedgerCoral
 import com.example.ui.theme.LedgerDivider
 import com.example.ui.theme.LedgerGreen
+import com.example.ui.theme.LedgerMotion
 import com.example.ui.theme.LedgerSurface
 import com.example.ui.theme.LedgerSurfaceElevated
 import com.example.ui.theme.LedgerSurfaceHighlight
 import com.example.ui.theme.LedgerTextMuted
 import com.example.ui.theme.LedgerTextPrimary
 import com.example.ui.theme.LedgerTextSecondary
+import com.example.ui.theme.LocalAppearancePreferences
 import com.example.ui.theme.TabularAmountStyle
 import com.example.util.LedgerFormatters
 import com.example.viewmodel.LedgerDataBundle
 import com.example.viewmodel.LedgerViewModel
 import java.util.Locale
+import kotlin.math.roundToLong
 
 enum class ConfigRoute {
     ROOT,
-    ACCOUNT_GROUPS,
     ACCOUNTS_SETTING,
     DELETED_ACCOUNTS,
     INCOME_CATEGORIES,
@@ -126,7 +135,8 @@ enum class ConfigRoute {
     BUDGET_SETTING,
     TAG_SETTING,
     REPEAT_SETTING,
-    APP_LOCK
+    APP_LOCK,
+    APPEARANCE
 }
 
 @Composable
@@ -135,14 +145,15 @@ fun MoreScreen(
     appLockEnabled: Boolean = false,
     onOpenConfiguration: () -> Unit,
     onOpenAppLock: () -> Unit = {},
+    onOpenAppearance: () -> Unit = {},
     onExportCsv: () -> Unit,
     onImportExcel: () -> Unit,
     onMassUploadLedgers: () -> Unit,
     onOpenBudgets: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val appearance = LocalAppearancePreferences.current
     var showLocalDataDialog by remember { mutableStateOf(false) }
-    var showStyleDialog by remember { mutableStateOf(false) }
     var showHelpDialog by remember { mutableStateOf(false) }
 
     Column(
@@ -283,9 +294,9 @@ fun MoreScreen(
                     SettingsListRow(
                         icon = Icons.Filled.Palette,
                         iconTint = LedgerAmber,
-                        title = "Style",
-                        subtitle = "Dark charcoal theme & color coding",
-                        onClick = { showStyleDialog = true },
+                        title = "Theme & Display",
+                        subtitle = appearance.summaryLabel(),
+                        onClick = onOpenAppearance,
                         modifier = Modifier.testTag("more_style_tile")
                     )
                     HorizontalDivider(
@@ -343,23 +354,6 @@ fun MoreScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showLocalDataDialog = false }) { Text("OK", color = LedgerCoral) }
-            }
-        )
-    }
-
-    if (showStyleDialog) {
-        AlertDialog(
-            onDismissRequest = { showStyleDialog = false },
-            containerColor = LedgerSurface,
-            title = { Text("Theme & Display", color = LedgerTextPrimary) },
-            text = {
-                Text(
-                    "Money Ledger uses the dark charcoal ledger theme with color-coded Income/Assets (Blue), Expenses/Liabilities (Coral Red), and Transfers (White), paired with tabular numerals for effortless scanning.",
-                    color = LedgerTextSecondary
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { showStyleDialog = false }) { Text("Got it", color = LedgerCoral) }
             }
         )
     }
@@ -473,13 +467,7 @@ fun ConfigurationHostScreen(
         targetState = currentRoute,
         transitionSpec = {
             val goingBack = targetState == ConfigRoute.ROOT
-            if (goingBack) {
-                (slideInHorizontally(tween(190)) { -it / 5 } + fadeIn(tween(180))) togetherWith
-                    (slideOutHorizontally(tween(160)) { it / 5 } + fadeOut(tween(130)))
-            } else {
-                (slideInHorizontally(tween(190)) { it / 5 } + fadeIn(tween(180))) togetherWith
-                    (slideOutHorizontally(tween(160)) { -it / 5 } + fadeOut(tween(130)))
-            }
+            LedgerMotion.pushPopTransform(goingBack = goingBack)
         },
         label = "config_route_transition"
     ) { route ->
@@ -492,11 +480,6 @@ fun ConfigurationHostScreen(
                 onNavigate = { currentRoute = it },
                 onMassUploadLedgers = onMassUploadLedgers,
                 onCreateCategoryLedger = onCreateCategoryLedger
-            )
-            ConfigRoute.ACCOUNT_GROUPS -> AccountGroupSettingScreen(
-                bundle = bundle,
-                viewModel = viewModel,
-                onBack = { navigateUp() }
             )
             ConfigRoute.ACCOUNTS_SETTING -> AccountsSettingScreen(
                 bundle = bundle,
@@ -545,6 +528,10 @@ fun ConfigurationHostScreen(
                 onLockStateChanged = onAppLockStateChanged,
                 onLockNow = onLockNow
             )
+            ConfigRoute.APPEARANCE -> AppearanceSettingsScreen(
+                currencySymbol = bundle.settings.mainCurrencySymbol,
+                onBack = { navigateUp() }
+            )
         }
     }
 }
@@ -575,8 +562,13 @@ private fun ConfigurationMenuScreen(
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             item { ConfigSectionHeader("Accounts") }
             item {
-                ConfigRow("Account Group", onClick = { onNavigate(ConfigRoute.ACCOUNT_GROUPS) })
-                ConfigRow("Accounts Setting", onClick = { onNavigate(ConfigRoute.ACCOUNTS_SETTING) })
+                val archivedTotal = bundle.archivedAccounts.size + bundle.archivedGroups.size + bundle.archivedMainGroups.size
+                ConfigRow(
+                    title = "Account Settings",
+                    value = "${bundle.activeAccounts.size} ledgers",
+                    valueColor = LedgerBlue,
+                    onClick = { onNavigate(ConfigRoute.ACCOUNTS_SETTING) }
+                )
                 ConfigRow(
                     title = "Mass Upload Ledgers",
                     value = "Excel / CSV",
@@ -585,7 +577,7 @@ private fun ConfigurationMenuScreen(
                 )
                 ConfigRow(
                     title = "Deleted accounts",
-                    value = if (bundle.archivedAccounts.isNotEmpty()) "${bundle.archivedAccounts.size}" else null,
+                    value = if (archivedTotal > 0) "$archivedTotal" else null,
                     onClick = { onNavigate(ConfigRoute.DELETED_ACCOUNTS) }
                 )
             }
@@ -644,6 +636,13 @@ private fun ConfigurationMenuScreen(
                         val next = if (settings.weeklyStartDay == "SUNDAY") "MONDAY" else "SUNDAY"
                         viewModel.updateSettings(settings.copy(weeklyStartDay = next))
                     }
+                )
+                val appearance = LocalAppearancePreferences.current
+                ConfigRow(
+                    title = "Theme & Display",
+                    value = "${appearance.themeMode.label} • ${appearance.textSize.label}",
+                    valueColor = LedgerAmber,
+                    onClick = { onNavigate(ConfigRoute.APPEARANCE) }
                 )
                 ConfigRow(
                     title = "App Lock (4-Digit PIN)",
@@ -720,13 +719,27 @@ private fun ConfigurationMenuScreen(
 }
 
 @Composable
-private fun AccountGroupSettingScreen(
+private fun AccountsSettingScreen(
     bundle: LedgerDataBundle,
     viewModel: LedgerViewModel,
     onBack: () -> Unit
 ) {
-    var editingGroup by remember { mutableStateOf<AccountGroup?>(null) }
-    var showGroupDialog by remember { mutableStateOf(false) }
+    val symbol = bundle.settings.mainCurrencySymbol
+    val hierarchy = bundle.accountHierarchy
+
+    var collapsedMainIds by remember { mutableStateOf(setOf<String>()) }
+    var collapsedSubIds by remember { mutableStateOf(setOf<String>()) }
+
+    var showAddChooserDialog by remember { mutableStateOf(false) }
+
+    var editingMainGroup by remember { mutableStateOf<MainAccountGroup?>(null) }
+    var showMainGroupDialog by remember { mutableStateOf(false) }
+
+    var editingSubGroup by remember { mutableStateOf<AccountGroup?>(null) }
+    var showSubGroupDialog by remember { mutableStateOf(false) }
+
+    var editingAccount by remember { mutableStateOf<Account?>(null) }
+    var showLedgerDialog by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -736,91 +749,559 @@ private fun AccountGroupSettingScreen(
             .navigationBarsPadding()
     ) {
         ConfigTopBar(
-            title = "Account Group",
+            title = "Account Settings",
             onBack = onBack,
             trailing = {
                 IconButton(
-                    onClick = {
-                        editingGroup = null
-                        showGroupDialog = true
-                    },
-                    modifier = Modifier.testTag("add_account_group_button")
+                    onClick = { showAddChooserDialog = true },
+                    modifier = Modifier.testTag("accounts_setting_add_button")
                 ) {
-                    Icon(Icons.Filled.Add, contentDescription = "Add group", tint = LedgerTextPrimary)
+                    Icon(Icons.Filled.Add, contentDescription = "Add main group, sub group, or ledger", tint = LedgerTextPrimary)
                 }
             }
         )
 
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(bundle.activeGroups, key = { it.id }) { grp ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(LedgerSurface)
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(
-                        onClick = { viewModel.setAccountGroupArchived(grp.id, true) },
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Icon(Icons.Filled.RemoveCircle, contentDescription = "Archive group", tint = LedgerCoral, modifier = Modifier.size(20.dp))
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(grp.name, style = MaterialTheme.typography.bodyLarge, color = LedgerTextPrimary)
-                        Text(
-                            text = if (grp.nature() == AccountNature.LIABILITY) "Liability" else "Asset",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = LedgerTextMuted
-                        )
-                    }
-                    IconButton(
-                        onClick = {
-                            editingGroup = grp
-                            showGroupDialog = true
+        // Hierarchy summary strip
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(LedgerSurfaceElevated)
+                .padding(horizontal = 16.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "Main Group → Sub Group → Ledger",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = LedgerTextSecondary
+            )
+            Text(
+                text = "${bundle.activeMainGroups.size} • ${bundle.activeGroups.size} • ${bundle.activeAccounts.size}",
+                style = MaterialTheme.typography.labelSmall,
+                color = LedgerTextMuted
+            )
+        }
+        HorizontalDivider(color = LedgerDivider)
+
+        val assetAccentBlue = LedgerBlue
+        val liabAccentCoral = LedgerCoral
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 28.dp)
+        ) {
+            hierarchy.forEach { mainEntry ->
+                val mg = mainEntry.mainGroup
+                val isMainExpanded = mg.id !in collapsedMainIds
+                val mainAccent = if (mg.accountNature() == AccountNature.LIABILITY) liabAccentCoral else assetAccentBlue
+                val isDefaultMain = mg.id == MainAccountGroup.DEFAULT_ASSETS_ID || mg.id == MainAccountGroup.DEFAULT_LIABILITIES_ID
+
+                // Level 1: Main Group Row
+                item(key = "mg_${mg.id}") {
+                    val chevronRot by animateFloatAsState(
+                        targetValue = if (isMainExpanded) 90f else 0f,
+                        animationSpec = LedgerMotion.quickSpring(),
+                        label = "mg_chev_${mg.id}"
+                    )
+                    Column {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 54.dp)
+                                .background(LedgerSurfaceHighlight)
+                                .clickable {
+                                    collapsedMainIds = if (isMainExpanded) {
+                                        collapsedMainIds + mg.id
+                                    } else {
+                                        collapsedMainIds - mg.id
+                                    }
+                                }
+                                .padding(start = 12.dp, end = 6.dp, top = 8.dp, bottom = 8.dp)
+                                .testTag("account_mapping_main_${mg.id}"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .width(4.dp)
+                                    .height(26.dp)
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(mainAccent)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = if (isMainExpanded) "Collapse ${mg.name}" else "Expand ${mg.name}",
+                                tint = mainAccent,
+                                modifier = Modifier.size(20.dp).rotate(chevronRot)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = mg.name,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = LedgerTextPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "${mainEntry.subGroups.size} sub ${if (mainEntry.subGroups.size == 1) "group" else "groups"} • ${mainEntry.totalLedgerCount} ${if (mainEntry.totalLedgerCount == 1) "ledger" else "ledgers"}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = LedgerTextSecondary
+                                )
+                            }
+                            IconButton(
+                                onClick = {
+                                    editingMainGroup = mg
+                                    showMainGroupDialog = true
+                                },
+                                modifier = Modifier.size(40.dp).testTag("edit_main_group_${mg.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Edit,
+                                    contentDescription = "Edit ${mg.name}",
+                                    tint = LedgerTextSecondary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            if (!isDefaultMain) {
+                                IconButton(
+                                    onClick = { viewModel.setMainGroupArchived(mg.id, true) },
+                                    modifier = Modifier.size(40.dp).testTag("archive_main_group_${mg.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.RemoveCircle,
+                                        contentDescription = "Archive ${mg.name}",
+                                        tint = LedgerCoral,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
                         }
-                    ) {
-                        Icon(Icons.Filled.Edit, contentDescription = "Edit group", tint = LedgerTextSecondary, modifier = Modifier.size(19.dp))
+                        HorizontalDivider(color = LedgerDivider, thickness = 0.75.dp)
                     }
                 }
-                HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+
+                if (isMainExpanded) {
+                    if (mainEntry.subGroups.isEmpty()) {
+                        item(key = "mg_empty_${mg.id}") {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(LedgerSurface)
+                                    .padding(start = 34.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "No sub groups under ${mg.name} yet",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = LedgerTextMuted
+                                )
+                            }
+                            HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                        }
+                    } else {
+                        mainEntry.subGroups.forEach { subSec ->
+                            val sub = subSec.group
+                            val isSubExpanded = sub.id !in collapsedSubIds
+
+                            // Level 2: Sub Group Row
+                            item(key = "sub_${sub.id}") {
+                                val subChevronRot by animateFloatAsState(
+                                    targetValue = if (isSubExpanded) 90f else 0f,
+                                    animationSpec = tween(160),
+                                    label = "sub_chev_${sub.id}"
+                                )
+                                Column {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(min = 50.dp)
+                                            .background(LedgerSurfaceElevated)
+                                            .clickable {
+                                                collapsedSubIds = if (isSubExpanded) {
+                                                    collapsedSubIds + sub.id
+                                                } else {
+                                                    collapsedSubIds - sub.id
+                                                }
+                                            }
+                                            .padding(start = 22.dp, end = 6.dp, top = 6.dp, bottom = 6.dp)
+                                            .testTag("account_mapping_sub_${sub.id}"),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .width(2.dp)
+                                                .height(22.dp)
+                                                .background(mainAccent.copy(alpha = 0.45f))
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                            contentDescription = if (isSubExpanded) "Collapse ${sub.name}" else "Expand ${sub.name}",
+                                            tint = LedgerTextSecondary,
+                                            modifier = Modifier.size(18.dp).rotate(subChevronRot)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = sub.name,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = LedgerTextPrimary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = "${subSec.accounts.size} ${if (subSec.accounts.size == 1) "ledger" else "ledgers"}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = LedgerTextMuted
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = {
+                                                editingSubGroup = sub
+                                                showSubGroupDialog = true
+                                            },
+                                            modifier = Modifier.size(38.dp).testTag("edit_sub_group_${sub.id}")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Edit,
+                                                contentDescription = "Edit ${sub.name}",
+                                                tint = LedgerTextSecondary,
+                                                modifier = Modifier.size(17.dp)
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { viewModel.setAccountGroupArchived(sub.id, true) },
+                                            modifier = Modifier.size(38.dp).testTag("archive_sub_group_${sub.id}")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.RemoveCircle,
+                                                contentDescription = "Archive ${sub.name}",
+                                                tint = LedgerCoral.copy(alpha = 0.85f),
+                                                modifier = Modifier.size(17.dp)
+                                            )
+                                        }
+                                    }
+                                    HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                                }
+                            }
+
+                            // Level 3: Ledgers under Sub Group
+                            if (isSubExpanded) {
+                                if (subSec.accounts.isEmpty()) {
+                                    item(key = "sub_empty_${sub.id}") {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .background(LedgerSurface)
+                                                .padding(start = 52.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "No ledgers yet",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = LedgerTextMuted
+                                            )
+                                        }
+                                        HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                                    }
+                                } else {
+                                    items(subSec.accounts, key = { "ledger_${it.account.id}" }) { accItem ->
+                                        val balColor = if (accItem.balance.roundToLong() < 0L) LedgerCoral else LedgerBlue
+                                        Column {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .heightIn(min = 48.dp)
+                                                    .background(LedgerSurface)
+                                                    .clickable {
+                                                        editingAccount = accItem.account
+                                                        showLedgerDialog = true
+                                                    }
+                                                    .padding(start = 46.dp, end = 8.dp, top = 9.dp, bottom = 9.dp)
+                                                    .testTag("account_mapping_ledger_${accItem.account.id}"),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(6.dp)
+                                                        .clip(CircleShape)
+                                                        .background(mainAccent.copy(alpha = 0.7f))
+                                                )
+                                                Spacer(modifier = Modifier.width(10.dp))
+                                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                                    Text(
+                                                        text = accItem.account.name,
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        color = LedgerTextPrimary,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                    if (!accItem.account.includeInNetWorth) {
+                                                        Text(
+                                                            text = "Excluded from Net Worth",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = LedgerTextMuted
+                                                        )
+                                                    }
+                                                }
+                                                Text(
+                                                    text = LedgerFormatters.formatSignedWhole(accItem.balance, symbol),
+                                                    style = TabularAmountStyle.copy(fontSize = 13.sp),
+                                                    color = balColor,
+                                                    maxLines = 1,
+                                                    softWrap = false,
+                                                    modifier = Modifier.padding(end = 4.dp)
+                                                )
+                                                IconButton(
+                                                    onClick = { viewModel.setAccountArchived(accItem.account.id, true) },
+                                                    modifier = Modifier.size(36.dp).testTag("archive_ledger_${accItem.account.id}")
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.DeleteOutline,
+                                                        contentDescription = "Archive ${accItem.account.name}",
+                                                        tint = LedgerTextMuted,
+                                                        modifier = Modifier.size(17.dp)
+                                                    )
+                                                }
+                                            }
+                                            HorizontalDivider(
+                                                color = LedgerDivider,
+                                                thickness = 0.5.dp,
+                                                modifier = Modifier.padding(start = 46.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
-    if (showGroupDialog) {
-        var name by remember(editingGroup) { mutableStateOf(editingGroup?.name.orEmpty()) }
-        var nature by remember(editingGroup) { mutableStateOf(editingGroup?.nature() ?: AccountNature.ASSET) }
+    // + Button Chooser Dialog: Main Group | Sub Group | Ledger
+    if (showAddChooserDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddChooserDialog = false },
+            containerColor = LedgerSurface,
+            title = {
+                Text(
+                    text = "Add Account Structure",
+                    color = LedgerTextPrimary,
+                    fontWeight = FontWeight.SemiBold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Choose what you would like to create:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = LedgerTextSecondary
+                    )
+                    AccountHierarchyCreateOptionRow(
+                        icon = Icons.Filled.AccountBalance,
+                        iconTint = LedgerBlue,
+                        title = "Main Group",
+                        subtitle = "Top-level group (e.g. Assets, Liabilities)",
+                        testTag = "add_choice_main_group",
+                        onClick = {
+                            showAddChooserDialog = false
+                            editingMainGroup = null
+                            showMainGroupDialog = true
+                        }
+                    )
+                    AccountHierarchyCreateOptionRow(
+                        icon = Icons.Filled.Folder,
+                        iconTint = LedgerAmber,
+                        title = "Sub Group",
+                        subtitle = "Category under a Main Group (e.g. Cash, Bank)",
+                        testTag = "add_choice_sub_group",
+                        onClick = {
+                            showAddChooserDialog = false
+                            editingSubGroup = null
+                            showSubGroupDialog = true
+                        }
+                    )
+                    AccountHierarchyCreateOptionRow(
+                        icon = Icons.Filled.AccountBalanceWallet,
+                        iconTint = LedgerCoral,
+                        title = "Ledger",
+                        subtitle = "Individual account under a Sub Group",
+                        testTag = "add_choice_ledger",
+                        onClick = {
+                            showAddChooserDialog = false
+                            editingAccount = null
+                            showLedgerDialog = true
+                        }
+                    )
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(
+                    onClick = { showAddChooserDialog = false },
+                    modifier = Modifier.testTag("add_choice_cancel_button")
+                ) {
+                    Text("Cancel", color = LedgerTextSecondary)
+                }
+            }
+        )
+    }
+
+    // Create / Edit Main Group Dialog (Simply asks Name)
+    if (showMainGroupDialog) {
+        var mainGroupName by remember(editingMainGroup, showMainGroupDialog) {
+            mutableStateOf(editingMainGroup?.name.orEmpty())
+        }
+        AlertDialog(
+            onDismissRequest = { showMainGroupDialog = false },
+            containerColor = LedgerSurface,
+            title = {
+                Text(
+                    text = if (editingMainGroup == null) "New Main Group" else "Edit Main Group",
+                    color = LedgerTextPrimary,
+                    fontWeight = FontWeight.SemiBold
+                )
+            },
+            text = {
+                OutlinedTextField(
+                    value = mainGroupName,
+                    onValueChange = { mainGroupName = it.take(60) },
+                    label = { Text("Main Group Name") },
+                    placeholder = { Text("e.g. Assets, Liabilities, Capital") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("main_group_name_input")
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (mainGroupName.isNotBlank()) {
+                            viewModel.saveMainGroup(
+                                existingId = editingMainGroup?.id,
+                                name = mainGroupName,
+                                nature = editingMainGroup?.accountNature(),
+                                sortOrder = editingMainGroup?.sortOrder ?: bundle.effectiveMainGroups.size.toLong()
+                            )
+                            showMainGroupDialog = false
+                        }
+                    },
+                    enabled = mainGroupName.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = LedgerCoral),
+                    modifier = Modifier.testTag("main_group_save_button")
+                ) {
+                    Text("Save", fontWeight = FontWeight.SemiBold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showMainGroupDialog = false }) {
+                    Text("Cancel", color = LedgerTextSecondary)
+                }
+            }
+        )
+    }
+
+    // Create / Edit Sub Group Dialog (Asks Name and Main Group)
+    if (showSubGroupDialog) {
+        val activeMainGroups = bundle.activeMainGroups
+        var subGroupName by remember(editingSubGroup, showSubGroupDialog) {
+            mutableStateOf(editingSubGroup?.name.orEmpty())
+        }
+        var selectedMainGroupId by remember(editingSubGroup, showSubGroupDialog, activeMainGroups) {
+            mutableStateOf(
+                editingSubGroup?.resolvedMainGroupId()
+                    ?: activeMainGroups.firstOrNull()?.id
+                    ?: MainAccountGroup.DEFAULT_ASSETS_ID
+            )
+        }
+        var mainGroupMenuExpanded by remember { mutableStateOf(false) }
+        val selectedMainGroup = activeMainGroups.firstOrNull { it.id == selectedMainGroupId }
+            ?: activeMainGroups.firstOrNull()
 
         AlertDialog(
-            onDismissRequest = { showGroupDialog = false },
+            onDismissRequest = { showSubGroupDialog = false },
             containerColor = LedgerSurface,
-            title = { Text(if (editingGroup == null) "New Account Group" else "Edit Account Group", color = LedgerTextPrimary) },
+            title = {
+                Text(
+                    text = if (editingSubGroup == null) "New Sub Group" else "Edit Sub Group",
+                    color = LedgerTextPrimary,
+                    fontWeight = FontWeight.SemiBold
+                )
+            },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it.take(60) },
-                        label = { Text("Group Name") },
+                        value = subGroupName,
+                        onValueChange = { subGroupName = it.take(60) },
+                        label = { Text("Sub Group Name") },
+                        placeholder = { Text("e.g. Cash, Bank Accounts, Credit Cards") },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("sub_group_name_input")
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        AccountNature.entries.forEach { opt ->
-                            val selected = nature == opt
-                            val tint = if (opt == AccountNature.ASSET) LedgerBlue else LedgerCoral
-                            Surface(
+
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "Main Group",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = LedgerTextSecondary
+                        )
+                        Box {
+                            OutlinedButton(
+                                onClick = { mainGroupMenuExpanded = true },
                                 shape = RoundedCornerShape(8.dp),
-                                color = if (selected) tint.copy(alpha = 0.2f) else LedgerSurfaceElevated,
-                                border = BorderStroke(1.dp, if (selected) tint else LedgerBorder),
+                                border = BorderStroke(1.dp, LedgerBorder),
                                 modifier = Modifier
-                                    .weight(1f)
-                                    .clickable { nature = opt }
-                                    .padding(vertical = 8.dp)
+                                    .fillMaxWidth()
+                                    .heightIn(min = 48.dp)
+                                    .testTag("sub_group_main_group_selector")
                             ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Text(if (opt == AccountNature.ASSET) "Asset" else "Liability", color = if (selected) tint else LedgerTextSecondary)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = selectedMainGroup?.name ?: "Select Main Group",
+                                        color = LedgerTextPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Filled.ArrowDropDown,
+                                        contentDescription = "Choose Main Group",
+                                        tint = LedgerTextSecondary
+                                    )
+                                }
+                            }
+                            DropdownMenu(
+                                expanded = mainGroupMenuExpanded,
+                                onDismissRequest = { mainGroupMenuExpanded = false },
+                                containerColor = LedgerSurfaceElevated
+                            ) {
+                                activeMainGroups.forEach { mg ->
+                                    val isChosen = mg.id == selectedMainGroup?.id
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = mg.name,
+                                                color = if (isChosen) LedgerCoral else LedgerTextPrimary,
+                                                fontWeight = if (isChosen) FontWeight.SemiBold else FontWeight.Normal
+                                            )
+                                        },
+                                        onClick = {
+                                            selectedMainGroupId = mg.id
+                                            mainGroupMenuExpanded = false
+                                        }
+                                    )
                                 }
                             }
                         }
@@ -830,109 +1311,39 @@ private fun AccountGroupSettingScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        if (name.isNotBlank()) {
+                        val chosen = selectedMainGroup
+                        if (subGroupName.isNotBlank() && chosen != null) {
                             viewModel.saveAccountGroup(
-                                existingId = editingGroup?.id,
-                                name = name,
-                                groupType = nature,
-                                sortOrder = editingGroup?.sortOrder ?: bundle.accountGroups.size.toLong()
+                                existingId = editingSubGroup?.id,
+                                name = subGroupName,
+                                groupType = chosen.accountNature(),
+                                sortOrder = editingSubGroup?.sortOrder ?: bundle.accountGroups.size.toLong(),
+                                mainGroupId = chosen.id
                             )
-                            showGroupDialog = false
+                            showSubGroupDialog = false
                         }
                     },
-                    enabled = name.isNotBlank(),
-                    colors = ButtonDefaults.buttonColors(containerColor = LedgerCoral)
-                ) { Text("Save") }
+                    enabled = subGroupName.isNotBlank() && selectedMainGroup != null,
+                    colors = ButtonDefaults.buttonColors(containerColor = LedgerCoral),
+                    modifier = Modifier.testTag("sub_group_save_button")
+                ) {
+                    Text("Save", fontWeight = FontWeight.SemiBold)
+                }
             },
             dismissButton = {
-                TextButton(onClick = { showGroupDialog = false }) { Text("Cancel", color = LedgerTextSecondary) }
-            }
-        )
-    }
-}
-
-@Composable
-private fun AccountsSettingScreen(
-    bundle: LedgerDataBundle,
-    viewModel: LedgerViewModel,
-    onBack: () -> Unit
-) {
-    var editingAccount by remember { mutableStateOf<Account?>(null) }
-    var showDialog by remember { mutableStateOf(false) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(LedgerBackground)
-            .statusBarsPadding()
-            .navigationBarsPadding()
-    ) {
-        ConfigTopBar(
-            title = "Accounts Setting",
-            onBack = onBack,
-            trailing = {
-                IconButton(
-                    onClick = {
-                        editingAccount = null
-                        showDialog = true
-                    },
-                    modifier = Modifier.testTag("accounts_setting_add_button")
-                ) {
-                    Icon(Icons.Filled.Add, contentDescription = "Add account", tint = LedgerTextPrimary)
+                TextButton(onClick = { showSubGroupDialog = false }) {
+                    Text("Cancel", color = LedgerTextSecondary)
                 }
             }
         )
-
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            bundle.accountSections.forEach { sec ->
-                if (sec.accounts.isNotEmpty()) {
-                    item(key = "sec_${sec.group.id}") {
-                        ConfigSectionHeader(sec.group.name)
-                    }
-                    items(sec.accounts, key = { it.account.id }) { item ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(LedgerSurface)
-                                .clickable {
-                                    editingAccount = item.account
-                                    showDialog = true
-                                }
-                                .padding(horizontal = 16.dp, vertical = 14.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = item.account.name,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = LedgerTextPrimary
-                                )
-                                if (!item.account.includeInNetWorth) {
-                                    Text(
-                                        text = "Excluded from Net Worth",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = LedgerTextMuted
-                                    )
-                                }
-                            }
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                contentDescription = null,
-                                tint = LedgerTextMuted
-                            )
-                        }
-                        HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
-                    }
-                }
-            }
-        }
     }
 
-    if (showDialog) {
+    // Create / Edit Ledger Dialog (Asks Sub Group + Ledger Name & Details)
+    if (showLedgerDialog) {
         AccountEditorDialog(
             bundle = bundle,
             existing = editingAccount,
-            onDismiss = { showDialog = false },
+            onDismiss = { showLedgerDialog = false },
             onSave = { groupId, name, initialBalance, nature, note, includeInNetWorth ->
                 viewModel.saveAccount(
                     existingId = editingAccount?.id,
@@ -944,9 +1355,77 @@ private fun AccountsSettingScreen(
                     sortOrder = editingAccount?.sortOrder ?: bundle.accounts.size.toLong(),
                     includeInNetWorth = includeInNetWorth
                 )
-                showDialog = false
+                showLedgerDialog = false
             }
         )
+    }
+}
+
+@Composable
+private fun AccountHierarchyCreateOptionRow(
+    icon: ImageVector,
+    iconTint: Color,
+    title: String,
+    subtitle: String,
+    testTag: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = LedgerSurfaceElevated,
+        border = BorderStroke(1.dp, LedgerBorder),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 58.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .testTag(testTag)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(iconTint.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = iconTint,
+                    modifier = Modifier.size(19.dp)
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = LedgerTextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = LedgerTextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = LedgerTextMuted,
+                modifier = Modifier.size(18.dp)
+            )
+        }
     }
 }
 
@@ -965,14 +1444,50 @@ private fun DeletedAccountsScreen(
     ) {
         ConfigTopBar(title = "Deleted Accounts", onBack = onBack)
 
-        if (bundle.archivedAccounts.isEmpty() && bundle.archivedGroups.isEmpty()) {
+        if (bundle.archivedAccounts.isEmpty() && bundle.archivedGroups.isEmpty() && bundle.archivedMainGroups.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-                Text("No deleted accounts or groups.", color = LedgerTextMuted)
+                Text("No deleted ledgers or groups.", color = LedgerTextMuted)
             }
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
+                if (bundle.archivedMainGroups.isNotEmpty()) {
+                    item { ConfigSectionHeader("Archived Main Groups") }
+                    items(bundle.archivedMainGroups, key = { it.id }) { mg ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(LedgerSurface)
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(mg.name, color = LedgerTextPrimary, modifier = Modifier.weight(1f))
+                            IconButton(onClick = { viewModel.setMainGroupArchived(mg.id, false) }) {
+                                Icon(Icons.Filled.Restore, contentDescription = "Restore main group", tint = LedgerBlue)
+                            }
+                        }
+                        HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                    }
+                }
+                if (bundle.archivedGroups.isNotEmpty()) {
+                    item { ConfigSectionHeader("Archived Sub Groups") }
+                    items(bundle.archivedGroups, key = { it.id }) { grp ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(LedgerSurface)
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(grp.name, color = LedgerTextPrimary, modifier = Modifier.weight(1f))
+                            IconButton(onClick = { viewModel.setAccountGroupArchived(grp.id, false) }) {
+                                Icon(Icons.Filled.Restore, contentDescription = "Restore sub group", tint = LedgerBlue)
+                            }
+                        }
+                        HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                    }
+                }
                 if (bundle.archivedAccounts.isNotEmpty()) {
-                    item { ConfigSectionHeader("Archived Accounts") }
+                    item { ConfigSectionHeader("Archived Ledgers") }
                     items(bundle.archivedAccounts, key = { it.id }) { acc ->
                         Row(
                             modifier = Modifier
@@ -987,24 +1502,6 @@ private fun DeletedAccountsScreen(
                             }
                             IconButton(onClick = { viewModel.deleteAccountPermanently(acc.id) }) {
                                 Icon(Icons.Filled.DeleteForever, contentDescription = "Delete permanently", tint = LedgerCoral)
-                            }
-                        }
-                        HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
-                    }
-                }
-                if (bundle.archivedGroups.isNotEmpty()) {
-                    item { ConfigSectionHeader("Archived Account Groups") }
-                    items(bundle.archivedGroups, key = { it.id }) { grp ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(LedgerSurface)
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(grp.name, color = LedgerTextPrimary, modifier = Modifier.weight(1f))
-                            IconButton(onClick = { viewModel.setAccountGroupArchived(grp.id, false) }) {
-                                Icon(Icons.Filled.Restore, contentDescription = "Restore group", tint = LedgerBlue)
                             }
                         }
                         HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
@@ -1432,13 +1929,25 @@ private fun TagSettingScreen(
     bundle: LedgerDataBundle,
     onBack: () -> Unit
 ) {
-    val tagCounts = remember(bundle.transactions) {
-        bundle.transactions.mapNotNull { it.effectiveTagging() }
-            .groupingBy { it }
-            .eachCount()
+    val symbol = bundle.settings.mainCurrencySymbol
+    var selectedSecondary by remember { mutableStateOf(false) }
+
+    val primaryStats = remember(bundle.transactions) {
+        bundle.transactions
+            .mapNotNull { tx -> tx.effectiveTagging()?.let { it to tx } }
+            .groupBy({ it.first }, { it.second })
             .entries
-            .sortedByDescending { it.value }
+            .sortedByDescending { it.value.size }
     }
+    val secondaryStats = remember(bundle.transactions) {
+        bundle.transactions
+            .mapNotNull { tx -> tx.effectiveSecondaryTagging()?.let { it to tx } }
+            .groupBy({ it.first }, { it.second })
+            .entries
+            .sortedByDescending { it.value.size }
+    }
+    val activeStats = if (selectedSecondary) secondaryStats else primaryStats
+    val activeAccent = if (selectedSecondary) LedgerAmber else LedgerCoral
 
     Column(
         modifier = Modifier
@@ -1448,22 +1957,110 @@ private fun TagSettingScreen(
             .navigationBarsPadding()
     ) {
         ConfigTopBar(title = "Tagging Settings", onBack = onBack)
-        if (tagCounts.isEmpty()) {
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(LedgerSurface)
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf(
+                Triple(false, "Tagging 1 (${primaryStats.size})", LedgerCoral),
+                Triple(true, "Tagging 2 (${secondaryStats.size})", LedgerAmber)
+            ).forEach { (isSec, label, color) ->
+                val selected = selectedSecondary == isSec
+                Surface(
+                    onClick = { selectedSecondary = isSec },
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (selected) color.copy(alpha = 0.18f) else LedgerSurfaceElevated,
+                    border = BorderStroke(1.dp, if (selected) color else LedgerBorder),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 44.dp)
+                        .testTag(if (isSec) "tag_setting_tab_2" else "tag_setting_tab_1")
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                            color = if (selected) color else LedgerTextPrimary,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
+                }
+            }
+        }
+        HorizontalDivider(color = LedgerDivider)
+
+        if (activeStats.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-                Text("Taggings you add to transactions will appear here.", color = LedgerTextMuted)
+                Text(
+                    text = if (selectedSecondary) {
+                        "Tagging 2 values you add to transactions will appear here for separate tracking."
+                    } else {
+                        "Tagging 1 values you add to transactions will appear here."
+                    },
+                    color = LedgerTextMuted,
+                    textAlign = TextAlign.Center
+                )
             }
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(tagCounts, key = { it.key }) { (tag, count) ->
+                items(activeStats, key = { "${selectedSecondary}_${it.key}" }) { (tag, txs) ->
+                    val inc = txs.filter { it.txType() == com.example.data.TransactionType.INCOME }.sumOf { it.amount }
+                    val exp = txs.filter { it.txType() == com.example.data.TransactionType.EXPENSE }.sumOf { it.amount }
+                    val net = inc - exp
+                    val netColor = when {
+                        net.roundToLong() < 0L -> LedgerCoral
+                        net.roundToLong() > 0L -> LedgerGreen
+                        else -> LedgerTextPrimary
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(LedgerSurface)
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                            .padding(horizontal = 16.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(tag, color = LedgerTextPrimary, style = MaterialTheme.typography.bodyLarge)
-                        Text("$count entries", color = LedgerTextSecondary, style = MaterialTheme.typography.bodySmall)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f).padding(end = 10.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .width(3.dp)
+                                    .height(26.dp)
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(activeAccent)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = tag,
+                                    color = LedgerTextPrimary,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "${txs.size} ${if (txs.size == 1) "entry" else "entries"}",
+                                    color = LedgerTextSecondary,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        }
+                        Text(
+                            text = LedgerFormatters.formatSignedWhole(net, symbol),
+                            style = TabularAmountStyle.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
+                            color = netColor,
+                            maxLines = 1,
+                            softWrap = false
+                        )
                     }
                     HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
                 }

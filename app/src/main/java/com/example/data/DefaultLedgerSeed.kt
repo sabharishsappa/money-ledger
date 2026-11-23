@@ -2,8 +2,16 @@ package com.example.data
 
 object DefaultLedgerSeed {
 
+    data class MainGroupTemplate(
+        val id: String,
+        val name: String,
+        val nature: AccountNature,
+        val sortOrder: Long
+    )
+
     data class GroupTemplate(
         val id: String,
+        val mainGroupId: String,
         val name: String,
         val nature: AccountNature,
         val sortOrder: Long
@@ -26,13 +34,18 @@ object DefaultLedgerSeed {
         val sortOrder: Long
     )
 
+    val defaultMainGroups = listOf(
+        MainGroupTemplate(MainAccountGroup.DEFAULT_ASSETS_ID, "Assets", AccountNature.ASSET, 0),
+        MainGroupTemplate(MainAccountGroup.DEFAULT_LIABILITIES_ID, "Liabilities", AccountNature.LIABILITY, 1)
+    )
+
     val defaultGroups = listOf(
-        GroupTemplate("grp_cash", "Cash", AccountNature.ASSET, 0),
-        GroupTemplate("grp_bank", "Bank Accounts", AccountNature.ASSET, 1),
-        GroupTemplate("grp_cards", "Credit Cards", AccountNature.LIABILITY, 2),
-        GroupTemplate("grp_investments", "Investments", AccountNature.ASSET, 3),
-        GroupTemplate("grp_loans", "Loans", AccountNature.LIABILITY, 4),
-        GroupTemplate("grp_others", "Others", AccountNature.ASSET, 5)
+        GroupTemplate("grp_cash", MainAccountGroup.DEFAULT_ASSETS_ID, "Cash", AccountNature.ASSET, 0),
+        GroupTemplate("grp_bank", MainAccountGroup.DEFAULT_ASSETS_ID, "Bank Accounts", AccountNature.ASSET, 1),
+        GroupTemplate("grp_cards", MainAccountGroup.DEFAULT_LIABILITIES_ID, "Credit Cards", AccountNature.LIABILITY, 2),
+        GroupTemplate("grp_investments", MainAccountGroup.DEFAULT_ASSETS_ID, "Investments", AccountNature.ASSET, 3),
+        GroupTemplate("grp_loans", MainAccountGroup.DEFAULT_LIABILITIES_ID, "Loans", AccountNature.LIABILITY, 4),
+        GroupTemplate("grp_others", MainAccountGroup.DEFAULT_ASSETS_ID, "Others", AccountNature.ASSET, 5)
     )
 
     val defaultAccounts = listOf(

@@ -38,6 +38,7 @@ class LedgerRepository(
     }
 
     private fun userDoc(uid: String) = db.collection("users").document(uid)
+    private fun mainGroupsCol(uid: String) = userDoc(uid).collection("mainGroups")
     private fun groupsCol(uid: String) = userDoc(uid).collection("accountGroups")
     private fun accountsCol(uid: String) = userDoc(uid).collection("accounts")
     private fun categoriesCol(uid: String) = userDoc(uid).collection("categories")
@@ -70,6 +71,19 @@ class LedgerRepository(
                         ?: UserSettings(userId = uid)
                 }
                 .logAndRethrow(uid, OperationType.GET, path)
+        )
+    }
+
+    override fun observeMainGroups(userId: String): Flow<List<MainAccountGroup>> = flow {
+        val uid = requireUserId(userId)
+        val path = "users/$uid/mainGroups"
+        emitAll(
+            mainGroupsCol(uid).snapshots()
+                .map { snapshot ->
+                    snapshot.toObjects(MainAccountGroup::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                        .sortedBy { it.sortOrder }
+                }
+                .logAndRethrow(uid, OperationType.LIST, path)
         )
     }
 
@@ -180,9 +194,21 @@ class LedgerRepository(
                 )
             }
 
+            DefaultLedgerSeed.defaultMainGroups.forEach { mg ->
+                val model = MainAccountGroup(
+                    userId = uid,
+                    name = mg.name,
+                    nature = mg.nature.name,
+                    sortOrder = mg.sortOrder,
+                    archived = false
+                )
+                batch.set(mainGroupsCol(uid).document(mg.id), model.toCreateMap(uid))
+            }
+
             DefaultLedgerSeed.defaultGroups.forEach { g ->
                 val model = AccountGroup(
                     userId = uid,
+                    mainGroupId = g.mainGroupId,
                     name = g.name,
                     groupType = g.nature.name,
                     sortOrder = g.sortOrder,
@@ -259,6 +285,87 @@ class LedgerRepository(
         }
     }
 
+    // --- Main Groups ---
+
+    override suspend fun saveMainGroup(
+        userId: String,
+        existingId: String?,
+        name: String,
+        nature: AccountNature,
+        sortOrder: Long
+    ): Result<Unit> {
+        val cleanName = name.trim().take(60)
+        if (cleanName.isEmpty()) return Result.failure(IllegalArgumentException("Main group name cannot be empty"))
+        var path = "users/$userId/mainGroups"
+        return try {
+            val uid = requireUserId(userId)
+            if (existingId.isNullOrBlank()) {
+                val docRef = mainGroupsCol(uid).document()
+                path = docRef.path
+                val model = MainAccountGroup(
+                    userId = uid,
+                    name = cleanName,
+                    nature = nature.name,
+                    sortOrder = sortOrder.coerceIn(0L, 10000L),
+                    archived = false
+                )
+                docRef.set(model.toCreateMap(uid)).await()
+            } else {
+                val docRef = mainGroupsCol(uid).document(existingId)
+                path = docRef.path
+                docRef.update(
+                    mapOf(
+                        "name" to cleanName,
+                        "nature" to nature.name,
+                        "sortOrder" to sortOrder.coerceIn(0L, 10000L),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, if (existingId.isNullOrBlank()) OperationType.CREATE else OperationType.UPDATE, path)
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun setMainGroupArchived(userId: String, mainGroupId: String, archived: Boolean): Result<Unit> {
+        val path = "users/$userId/mainGroups/$mainGroupId"
+        return try {
+            val uid = requireUserId(userId)
+            require(mainGroupId.isNotBlank()) { "Main group ID must not be blank" }
+            mainGroupsCol(uid).document(mainGroupId).update(
+                mapOf(
+                    "archived" to archived,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun deleteMainGroup(userId: String, mainGroupId: String): Result<Unit> {
+        val path = "users/$userId/mainGroups/$mainGroupId"
+        return try {
+            val uid = requireUserId(userId)
+            require(mainGroupId.isNotBlank()) { "Main group ID must not be blank" }
+            mainGroupsCol(uid).document(mainGroupId).delete().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, path)
+            Result.failure(e)
+        }
+    }
+
     // --- Account Groups ---
 
     override suspend fun saveAccountGroup(
@@ -266,10 +373,17 @@ class LedgerRepository(
         existingId: String?,
         name: String,
         groupType: AccountNature,
-        sortOrder: Long
+        sortOrder: Long,
+        mainGroupId: String
     ): Result<Unit> {
         val cleanName = name.trim().take(60)
         if (cleanName.isEmpty()) return Result.failure(IllegalArgumentException("Group name cannot be empty"))
+        val resolvedMainId = mainGroupId.takeIf { it.isNotBlank() }
+            ?: if (groupType == AccountNature.LIABILITY) {
+                MainAccountGroup.DEFAULT_LIABILITIES_ID
+            } else {
+                MainAccountGroup.DEFAULT_ASSETS_ID
+            }
         var path = "users/$userId/accountGroups"
         return try {
             val uid = requireUserId(userId)
@@ -278,6 +392,7 @@ class LedgerRepository(
                 path = docRef.path
                 val model = AccountGroup(
                     userId = uid,
+                    mainGroupId = resolvedMainId,
                     name = cleanName,
                     groupType = groupType.name,
                     sortOrder = sortOrder.coerceIn(0L, 10000L),
@@ -289,6 +404,7 @@ class LedgerRepository(
                 path = docRef.path
                 docRef.update(
                     mapOf(
+                        "mainGroupId" to resolvedMainId,
                         "name" to cleanName,
                         "groupType" to groupType.name,
                         "sortOrder" to sortOrder.coerceIn(0L, 10000L),
@@ -535,6 +651,7 @@ class LedgerRepository(
                     "subcategory" to tx.subcategory?.trim()?.take(60)?.takeIf { it.isNotEmpty() },
                     "note" to tx.note.trim().take(140),
                     "tagging" to tx.tagging?.trim()?.take(60)?.takeIf { it.isNotEmpty() },
+                    "secondaryTagging" to tx.secondaryTagging?.trim()?.take(60)?.takeIf { it.isNotEmpty() },
                     "description" to tx.description?.trim()?.take(500)?.takeIf { it.isNotEmpty() },
                     "tags" to tx.tags.map { it.trim().take(40) }.filter { it.isNotEmpty() }.take(10),
                     "favorite" to tx.favorite,

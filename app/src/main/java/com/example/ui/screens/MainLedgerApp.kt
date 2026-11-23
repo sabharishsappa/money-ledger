@@ -119,6 +119,7 @@ import com.example.ui.theme.LedgerBackground
 import com.example.ui.theme.LedgerBlue
 import com.example.ui.theme.LedgerBorder
 import com.example.ui.theme.LedgerCoral
+import com.example.ui.theme.LedgerMotion
 import com.example.ui.theme.LedgerDivider
 import com.example.ui.theme.LedgerGreen
 import com.example.ui.theme.LedgerNavBar
@@ -452,28 +453,7 @@ private fun LocalLedgerShell(
                 transitionSpec = {
                     val enteringOverlay = initialState == ActiveOverlay.None && targetState != ActiveOverlay.None
                     val exitingOverlay = initialState != ActiveOverlay.None && targetState == ActiveOverlay.None
-                    when {
-                        enteringOverlay -> {
-                            (slideInVertically(
-                                animationSpec = tween(220, easing = FastOutSlowInEasing),
-                                initialOffsetY = { it / 14 }
-                            ) + fadeIn(animationSpec = tween(200)))
-                                .togetherWith(fadeOut(animationSpec = tween(140)))
-                        }
-                        exitingOverlay -> {
-                            fadeIn(animationSpec = tween(180))
-                                .togetherWith(
-                                    slideOutVertically(
-                                        animationSpec = tween(180, easing = FastOutSlowInEasing),
-                                        targetOffsetY = { it / 14 }
-                                    ) + fadeOut(animationSpec = tween(150))
-                                )
-                        }
-                        else -> {
-                            fadeIn(animationSpec = tween(180))
-                                .togetherWith(fadeOut(animationSpec = tween(140)))
-                        }
-                    }
+                    LedgerMotion.overlayTransform(entering = enteringOverlay, exiting = exitingOverlay)
                 },
                 label = "overlay_transition"
             ) { currentOverlay ->
@@ -1478,17 +1458,7 @@ private fun MainTabContent(
     AnimatedContent(
         targetState = activeTab,
         transitionSpec = {
-            val direction = if (targetState.ordinal >= initialState.ordinal) 1 else -1
-            (slideInHorizontally(
-                animationSpec = tween(190, easing = FastOutSlowInEasing),
-                initialOffsetX = { direction * (it / 16) }
-            ) + fadeIn(animationSpec = tween(170)))
-                .togetherWith(
-                    slideOutHorizontally(
-                        animationSpec = tween(150, easing = FastOutSlowInEasing),
-                        targetOffsetX = { -direction * (it / 20) }
-                    ) + fadeOut(animationSpec = tween(130))
-                )
+            LedgerMotion.tabSwitchTransform(forward = targetState.ordinal >= initialState.ordinal)
         },
         modifier = modifier,
         label = "main_tab_transition"
@@ -1511,7 +1481,6 @@ private fun MainTabContent(
                 viewModel = viewModel,
                 onSelectAccount = onSelectAccount,
                 onOpenAccountsSetting = { onOpenConfig(ConfigRoute.ACCOUNTS_SETTING) },
-                onOpenAccountGroups = { onOpenConfig(ConfigRoute.ACCOUNT_GROUPS) },
                 onMassUploadLedgers = onMassUploadLedgers,
                 onCreateCategoryLedger = onCreateCategoryLedger,
                 modifier = Modifier.fillMaxSize()
@@ -1532,6 +1501,7 @@ private fun MainTabContent(
                 appLockEnabled = appLockEnabled,
                 onOpenConfiguration = { onOpenConfig(ConfigRoute.ROOT) },
                 onOpenAppLock = { onOpenConfig(ConfigRoute.APP_LOCK) },
+                onOpenAppearance = { onOpenConfig(ConfigRoute.APPEARANCE) },
                 onExportCsv = onExportCsv,
                 onImportExcel = onImportExcel,
                 onMassUploadLedgers = onMassUploadLedgers,
@@ -1564,23 +1534,17 @@ private fun LedgerBottomBar(
                 val selected = activeTab == tab
                 val tint by animateColorAsState(
                     targetValue = if (selected) LedgerCoral else LedgerTextMuted,
-                    animationSpec = tween(180),
+                    animationSpec = LedgerMotion.microTween(100),
                     label = "bottom_bar_tint_${tab.name}"
                 )
                 val pillWidth by animateDpAsState(
                     targetValue = if (selected) 46.dp else 0.dp,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMedium
-                    ),
+                    animationSpec = LedgerMotion.quickSpring(),
                     label = "bottom_bar_pill_${tab.name}"
                 )
                 val iconScale by animateFloatAsState(
-                    targetValue = if (selected) 1.08f else 1.0f,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessMedium
-                    ),
+                    targetValue = if (selected) 1.06f else 1.0f,
+                    animationSpec = LedgerMotion.quickSpring(),
                     label = "bottom_bar_scale_${tab.name}"
                 )
 

@@ -34,12 +34,27 @@ class LocalRoomLedgerRepository(
             }
         }
 
+    override fun observeMainGroups(userId: String): Flow<List<MainAccountGroup>> =
+        dao.observeMainGroups(userId).map { list ->
+            list.map {
+                MainAccountGroup(
+                    id = it.id,
+                    userId = it.userId,
+                    name = it.name,
+                    nature = it.nature,
+                    sortOrder = it.sortOrder,
+                    archived = it.archived
+                )
+            }
+        }
+
     override fun observeAccountGroups(userId: String): Flow<List<AccountGroup>> =
         dao.observeAccountGroups(userId).map { list ->
             list.map {
                 AccountGroup(
                     id = it.id,
                     userId = it.userId,
+                    mainGroupId = it.mainGroupId,
                     name = it.name,
                     groupType = it.groupType,
                     sortOrder = it.sortOrder,
@@ -102,6 +117,7 @@ class LocalRoomLedgerRepository(
                     subcategory = it.subcategory,
                     note = it.note,
                     tagging = it.tagging,
+                    secondaryTagging = it.secondaryTagging,
                     description = it.description,
                     tags = emptyList(),
                     favorite = it.favorite,
@@ -138,6 +154,21 @@ class LocalRoomLedgerRepository(
 
     override suspend fun ensureInitialized(userId: String): Result<Unit> {
         return try {
+            val existingMainGroups = dao.getMainGroups(userId)
+            if (existingMainGroups.isEmpty()) {
+                dao.upsertMainGroups(
+                    DefaultLedgerSeed.defaultMainGroups.map { mg ->
+                        LocalMainGroupEntity(
+                            id = mg.id,
+                            userId = userId,
+                            name = mg.name,
+                            nature = mg.nature.name,
+                            sortOrder = mg.sortOrder,
+                            archived = false
+                        )
+                    }
+                )
+            }
             val existing = dao.getSettings(userId)
             if (existing != null && existing.seeded) {
                 return Result.success(Unit)
@@ -159,6 +190,7 @@ class LocalRoomLedgerRepository(
                     LocalAccountGroupEntity(
                         id = g.id,
                         userId = userId,
+                        mainGroupId = g.mainGroupId,
                         name = g.name,
                         groupType = g.nature.name,
                         sortOrder = g.sortOrder,
@@ -227,22 +259,62 @@ class LocalRoomLedgerRepository(
         )
     }
 
+    override suspend fun saveMainGroup(
+        userId: String,
+        existingId: String?,
+        name: String,
+        nature: AccountNature,
+        sortOrder: Long
+    ): Result<Unit> {
+        val cleanName = name.trim().take(60)
+        if (cleanName.isEmpty()) return Result.failure(IllegalArgumentException("Main group name cannot be empty"))
+        return runSafely {
+            val id = existingId?.takeIf { it.isNotBlank() } ?: "mg_${UUID.randomUUID().toString().replace("-", "").take(12)}"
+            val existing = dao.getMainGroup(id)
+            dao.upsertMainGroup(
+                LocalMainGroupEntity(
+                    id = id,
+                    userId = userId,
+                    name = cleanName,
+                    nature = nature.name,
+                    sortOrder = sortOrder.coerceIn(0L, 10000L),
+                    archived = existing?.archived ?: false
+                )
+            )
+        }
+    }
+
+    override suspend fun setMainGroupArchived(userId: String, mainGroupId: String, archived: Boolean): Result<Unit> =
+        runSafely { dao.setMainGroupArchived(userId, mainGroupId, archived) }
+
+    override suspend fun deleteMainGroup(userId: String, mainGroupId: String): Result<Unit> =
+        runSafely { dao.deleteMainGroup(userId, mainGroupId) }
+
     override suspend fun saveAccountGroup(
         userId: String,
         existingId: String?,
         name: String,
         groupType: AccountNature,
-        sortOrder: Long
+        sortOrder: Long,
+        mainGroupId: String
     ): Result<Unit> {
         val cleanName = name.trim().take(60)
-        if (cleanName.isEmpty()) return Result.failure(IllegalArgumentException("Group name cannot be empty"))
+        if (cleanName.isEmpty()) return Result.failure(IllegalArgumentException("Sub group name cannot be empty"))
         return runSafely {
             val id = existingId?.takeIf { it.isNotBlank() } ?: "grp_${UUID.randomUUID().toString().replace("-", "").take(12)}"
             val existing = dao.getAccountGroup(id)
+            val resolvedMainId = mainGroupId.takeIf { it.isNotBlank() }
+                ?: existing?.mainGroupId?.takeIf { it.isNotBlank() }
+                ?: if (groupType == AccountNature.LIABILITY) {
+                    MainAccountGroup.DEFAULT_LIABILITIES_ID
+                } else {
+                    MainAccountGroup.DEFAULT_ASSETS_ID
+                }
             dao.upsertAccountGroup(
                 LocalAccountGroupEntity(
                     id = id,
                     userId = userId,
+                    mainGroupId = resolvedMainId,
                     name = cleanName,
                     groupType = groupType.name,
                     sortOrder = sortOrder.coerceIn(0L, 10000L),
@@ -357,6 +429,7 @@ class LocalRoomLedgerRepository(
                     subcategory = tx.subcategory?.trim()?.take(60)?.takeIf { it.isNotEmpty() },
                     note = tx.note.trim().take(140),
                     tagging = tx.tagging?.trim()?.take(60)?.takeIf { it.isNotEmpty() },
+                    secondaryTagging = tx.secondaryTagging?.trim()?.take(60)?.takeIf { it.isNotEmpty() },
                     description = tx.description?.trim()?.take(500)?.takeIf { it.isNotEmpty() },
                     favorite = tx.favorite,
                     repeatFrequency = tx.normalizedRepeatFrequency()

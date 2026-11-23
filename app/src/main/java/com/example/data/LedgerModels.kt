@@ -175,9 +175,49 @@ data class UserSettings(
 @Keep
 @Immutable
 @IgnoreExtraProperties
+data class MainAccountGroup(
+    @DocumentId val id: String = "",
+    val userId: String = "",
+    val name: String = "",
+    val nature: String = AccountNature.ASSET.name,
+    val sortOrder: Long = 0L,
+    val archived: Boolean = false,
+    val createdAt: Timestamp? = null,
+    val updatedAt: Timestamp? = null
+) {
+    fun accountNature(): AccountNature = AccountNature.safeValueOf(nature)
+
+    fun toCreateMap(uid: String): Map<String, Any> = mapOf(
+        "userId" to uid,
+        "name" to name.trim().take(60),
+        "nature" to AccountNature.safeValueOf(nature).name,
+        "sortOrder" to sortOrder.coerceIn(0L, 10000L),
+        "archived" to archived,
+        "createdAt" to FieldValue.serverTimestamp(),
+        "updatedAt" to FieldValue.serverTimestamp()
+    )
+
+    companion object {
+        const val DEFAULT_ASSETS_ID = "mg_assets"
+        const val DEFAULT_LIABILITIES_ID = "mg_liabilities"
+
+        fun inferNatureFromName(name: String): AccountNature {
+            val lower = name.trim().lowercase()
+            val isLiability = listOf(
+                "liab", "loan", "debt", "credit", "payable", "borrow", "mortgage", "due"
+            ).any { lower.contains(it) }
+            return if (isLiability) AccountNature.LIABILITY else AccountNature.ASSET
+        }
+    }
+}
+
+@Keep
+@Immutable
+@IgnoreExtraProperties
 data class AccountGroup(
     @DocumentId val id: String = "",
     val userId: String = "",
+    val mainGroupId: String = "",
     val name: String = "",
     val groupType: String = AccountNature.ASSET.name,
     val sortOrder: Long = 0L,
@@ -187,8 +227,17 @@ data class AccountGroup(
 ) {
     fun nature(): AccountNature = AccountNature.safeValueOf(groupType)
 
+    fun resolvedMainGroupId(): String =
+        mainGroupId.takeIf { it.isNotBlank() }
+            ?: if (nature() == AccountNature.LIABILITY) {
+                MainAccountGroup.DEFAULT_LIABILITIES_ID
+            } else {
+                MainAccountGroup.DEFAULT_ASSETS_ID
+            }
+
     fun toCreateMap(uid: String): Map<String, Any> = mapOf(
         "userId" to uid,
+        "mainGroupId" to resolvedMainGroupId(),
         "name" to name.trim().take(60),
         "groupType" to AccountNature.safeValueOf(groupType).name,
         "sortOrder" to sortOrder.coerceIn(0L, 10000L),
@@ -281,6 +330,7 @@ data class LedgerTransaction(
     val subcategory: String? = null,
     val note: String = "",
     val tagging: String? = null,
+    val secondaryTagging: String? = null,
     val description: String? = null,
     val tags: List<String> = emptyList(),
     val favorite: Boolean = false,
@@ -297,6 +347,9 @@ data class LedgerTransaction(
         tagging?.trim()?.takeIf { it.isNotEmpty() }
             ?: tags.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
 
+    fun effectiveSecondaryTagging(): String? =
+        secondaryTagging?.trim()?.takeIf { it.isNotEmpty() }
+
     fun toCreateMap(uid: String): Map<String, Any> {
         val raw = mutableMapOf<String, Any?>(
             "userId" to uid,
@@ -311,6 +364,7 @@ data class LedgerTransaction(
             "subcategory" to subcategory?.trim()?.take(60)?.takeIf { it.isNotEmpty() },
             "note" to note.trim().take(140),
             "tagging" to tagging?.trim()?.take(60)?.takeIf { it.isNotEmpty() },
+            "secondaryTagging" to secondaryTagging?.trim()?.take(60)?.takeIf { it.isNotEmpty() },
             "description" to description?.trim()?.take(500)?.takeIf { it.isNotEmpty() },
             "tags" to tags.map { it.trim().take(40) }.filter { it.isNotEmpty() }.take(10),
             "favorite" to favorite,

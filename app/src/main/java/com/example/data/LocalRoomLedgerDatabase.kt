@@ -10,6 +10,8 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "local_user_settings")
@@ -24,10 +26,21 @@ data class LocalUserSettingsEntity(
     val seeded: Boolean = false
 )
 
+@Entity(tableName = "local_main_groups")
+data class LocalMainGroupEntity(
+    @PrimaryKey val id: String,
+    val userId: String,
+    val name: String,
+    val nature: String,
+    val sortOrder: Long,
+    val archived: Boolean
+)
+
 @Entity(tableName = "local_account_groups")
 data class LocalAccountGroupEntity(
     @PrimaryKey val id: String,
     val userId: String,
+    val mainGroupId: String = "",
     val name: String,
     val groupType: String,
     val sortOrder: Long,
@@ -74,6 +87,7 @@ data class LocalTransactionEntity(
     val subcategory: String?,
     val note: String,
     val tagging: String?,
+    val secondaryTagging: String? = null,
     val description: String?,
     val favorite: Boolean,
     val repeatFrequency: String
@@ -107,6 +121,27 @@ interface LocalLedgerDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertSettings(entity: LocalUserSettingsEntity)
+
+    @Query("SELECT * FROM local_main_groups WHERE userId = :userId ORDER BY sortOrder ASC")
+    fun observeMainGroups(userId: String): Flow<List<LocalMainGroupEntity>>
+
+    @Query("SELECT * FROM local_main_groups WHERE userId = :userId ORDER BY sortOrder ASC")
+    suspend fun getMainGroups(userId: String): List<LocalMainGroupEntity>
+
+    @Query("SELECT * FROM local_main_groups WHERE id = :id LIMIT 1")
+    suspend fun getMainGroup(id: String): LocalMainGroupEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertMainGroup(entity: LocalMainGroupEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertMainGroups(entities: List<LocalMainGroupEntity>)
+
+    @Query("UPDATE local_main_groups SET archived = :archived WHERE id = :id AND userId = :userId")
+    suspend fun setMainGroupArchived(userId: String, id: String, archived: Boolean)
+
+    @Query("DELETE FROM local_main_groups WHERE id = :id AND userId = :userId")
+    suspend fun deleteMainGroup(userId: String, id: String)
 
     @Query("SELECT * FROM local_account_groups WHERE userId = :userId ORDER BY sortOrder ASC")
     fun observeAccountGroups(userId: String): Flow<List<LocalAccountGroupEntity>>
@@ -187,6 +222,7 @@ interface LocalLedgerDao {
 @Database(
     entities = [
         LocalUserSettingsEntity::class,
+        LocalMainGroupEntity::class,
         LocalAccountGroupEntity::class,
         LocalAccountEntity::class,
         LocalCategoryEntity::class,
@@ -194,7 +230,7 @@ interface LocalLedgerDao {
         LocalBudgetEntity::class,
         LocalFinanceNoteEntity::class
     ],
-    version = 1,
+    version = 3,
     exportSchema = false
 )
 abstract class LocalLedgerDatabase : RoomDatabase() {
@@ -204,13 +240,46 @@ abstract class LocalLedgerDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: LocalLedgerDatabase? = null
 
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `local_main_groups` (
+                        `id` TEXT NOT NULL,
+                        `userId` TEXT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `nature` TEXT NOT NULL,
+                        `sortOrder` INTEGER NOT NULL,
+                        `archived` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "ALTER TABLE `local_account_groups` ADD COLUMN `mainGroupId` TEXT NOT NULL DEFAULT ''"
+                )
+            }
+        }
+
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `local_transactions` ADD COLUMN `secondaryTagging` TEXT"
+                )
+            }
+        }
+
         fun getInstance(context: Context): LocalLedgerDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     LocalLedgerDatabase::class.java,
                     "money_ledger_local.db"
-                ).fallbackToDestructiveMigration().build().also { INSTANCE = it }
+                )
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .fallbackToDestructiveMigration()
+                    .build()
+                    .also { INSTANCE = it }
             }
         }
     }

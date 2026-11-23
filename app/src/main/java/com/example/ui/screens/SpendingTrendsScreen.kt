@@ -83,6 +83,7 @@ import com.example.ui.theme.LedgerBackground
 import com.example.ui.theme.LedgerBlue
 import com.example.ui.theme.LedgerBorder
 import com.example.ui.theme.LedgerCoral
+import com.example.ui.theme.LedgerMotion
 import com.example.ui.theme.LedgerDivider
 import com.example.ui.theme.LedgerGreen
 import com.example.ui.theme.LedgerSurface
@@ -642,7 +643,7 @@ private fun SpendingBarChartCard(
         animProgress.snapTo(0f)
         animProgress.animateTo(
             targetValue = 1f,
-            animationSpec = tween(durationMillis = 420, easing = FastOutSlowInEasing)
+            animationSpec = LedgerMotion.chartTween(270)
         )
     }
 
@@ -694,12 +695,12 @@ private fun SpendingBarChartCard(
                                 val active = chartMode == mode
                                 val bg by animateColorAsState(
                                     targetValue = if (active) LedgerCoral else Color.Transparent,
-                                    animationSpec = tween(160),
+                                    animationSpec = LedgerMotion.microTween(100),
                                     label = "chart_mode_bg_${mode.name}"
                                 )
                                 val fg by animateColorAsState(
                                     targetValue = if (active) Color.White else LedgerTextSecondary,
-                                    animationSpec = tween(160),
+                                    animationSpec = LedgerMotion.microTween(100),
                                     label = "chart_mode_fg_${mode.name}"
                                 )
                                 Box(
@@ -763,6 +764,11 @@ private fun SpendingBarChartCard(
                         )
                     }
 
+                    val trendDividerColor = LedgerDivider
+                    val trendHighlightColor = LedgerSurfaceHighlight
+                    val trendCoralColor = LedgerCoral
+                    val trendBorderColor = LedgerBorder
+
                     // Bars Canvas + Month X-Axis
                     Column(
                         modifier = Modifier
@@ -797,7 +803,7 @@ private fun SpendingBarChartCard(
                             for (step in 0..3) {
                                 val y = topPad + plotHeight * (step / 4f)
                                 drawLine(
-                                    color = LedgerDivider.copy(alpha = if (step % 2 == 0) 0.65f else 0.35f),
+                                    color = trendDividerColor.copy(alpha = if (step % 2 == 0) 0.65f else 0.35f),
                                     start = Offset(0f, y),
                                     end = Offset(size.width, y),
                                     strokeWidth = 1.dp.toPx(),
@@ -809,7 +815,7 @@ private fun SpendingBarChartCard(
                             if (selectedMonthIndex in months.indices) {
                                 val selX = selectedMonthIndex * slotPx
                                 drawRoundRect(
-                                    color = LedgerSurfaceHighlight.copy(alpha = 0.55f),
+                                    color = trendHighlightColor.copy(alpha = 0.55f),
                                     topLeft = Offset(selX + 2.dp.toPx(), 0f),
                                     size = Size((slotPx - 4.dp.toPx()).coerceAtLeast(1f), size.height),
                                     cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx())
@@ -836,7 +842,7 @@ private fun SpendingBarChartCard(
                                             if (segHeight > 0.5f) {
                                                 val segTop = (currentBottomY - segHeight).coerceAtLeast(topPad)
                                                 val actualH = (currentBottomY - segTop).coerceAtLeast(0.5f)
-                                                val fillColor = (colorMap[cat.categoryId] ?: LedgerCoral).copy(alpha = alpha)
+                                                val fillColor = (colorMap[cat.categoryId] ?: trendCoralColor).copy(alpha = alpha)
                                                 val isTopSegment = sliceIdx == activeSlices.lastIndex
 
                                                 if (isTopSegment) {
@@ -887,7 +893,7 @@ private fun SpendingBarChartCard(
                                             if (barH > 0.5f) {
                                                 val x = startX + cIdx * (singleBarWidth + gap)
                                                 val y = (baselineY - barH).coerceAtLeast(topPad)
-                                                val fillColor = (colorMap[cat.categoryId] ?: LedgerCoral).copy(alpha = alpha)
+                                                val fillColor = (colorMap[cat.categoryId] ?: trendCoralColor).copy(alpha = alpha)
                                                 drawRoundRect(
                                                     color = fillColor,
                                                     topLeft = Offset(x, y),
@@ -902,7 +908,7 @@ private fun SpendingBarChartCard(
 
                             // Crisp baseline axis
                             drawLine(
-                                color = LedgerBorder,
+                                color = trendBorderColor,
                                 start = Offset(0f, baselineY),
                                 end = Offset(size.width, baselineY),
                                 strokeWidth = 1.4.dp.toPx()
@@ -944,7 +950,7 @@ private fun SpendingBarChartCard(
                 if (selectedMonth != null) {
                     AnimatedContent(
                         targetState = selectedMonth to visibleIdSet,
-                        transitionSpec = { fadeIn(tween(150)) togetherWith fadeOut(tween(110)) },
+                        transitionSpec = { LedgerMotion.fastFadeTransform() },
                         label = "spending_month_tooltip"
                     ) { (month, activeIds) ->
                         SelectedMonthTooltipCard(

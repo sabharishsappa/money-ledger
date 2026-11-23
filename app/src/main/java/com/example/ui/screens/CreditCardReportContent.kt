@@ -383,6 +383,7 @@ private fun androidx.compose.foundation.layout.RowScope.TableAmount(
     )
 }
 
+@Composable
 private fun outstandingColor(amount: Double): Color = when {
     amount.roundToLong() > 0L -> LedgerCoral
     amount.roundToLong() < 0L -> LedgerGreen

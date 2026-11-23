@@ -94,6 +94,7 @@ import com.example.ui.theme.LedgerBackground
 import com.example.ui.theme.LedgerBlue
 import com.example.ui.theme.LedgerBorder
 import com.example.ui.theme.LedgerCoral
+import com.example.ui.theme.LedgerMotion
 import com.example.ui.theme.LedgerDivider
 import com.example.ui.theme.LedgerSurface
 import com.example.ui.theme.LedgerSurfaceElevated
@@ -208,8 +209,12 @@ fun TransactionsScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Filled.FilterList,
-                        contentDescription = "Filter by tag",
-                        tint = if (filter.selectedTagFilter != null) LedgerCoral else LedgerTextSecondary
+                        contentDescription = "Filter by tagging",
+                        tint = if (filter.selectedTagFilter != null || filter.selectedSecondaryTagFilter != null) {
+                            LedgerCoral
+                        } else {
+                            LedgerTextSecondary
+                        }
                     )
                 }
             }
@@ -217,8 +222,8 @@ fun TransactionsScreen(
             // Expandable Search Bar
             AnimatedVisibility(
                 visible = showSearchBar,
-                enter = expandVertically(tween(180)) + fadeIn(tween(150)),
-                exit = shrinkVertically(tween(160)) + fadeOut(tween(120))
+                enter = LedgerMotion.expandEnter(),
+                exit = LedgerMotion.shrinkExit()
             ) {
                 OutlinedTextField(
                     value = filter.searchQuery,
@@ -248,42 +253,107 @@ fun TransactionsScreen(
                 )
             }
 
-            // Expandable Tagging Filter Row
+            // Expandable Tagging 1 & Tagging 2 Filter Rows (Tracked Separately)
             AnimatedVisibility(
-                visible = showTagFilterRow && bundle.allTaggings.isNotEmpty(),
-                enter = expandVertically(tween(180)) + fadeIn(tween(150)),
-                exit = shrinkVertically(tween(160)) + fadeOut(tween(120))
+                visible = showTagFilterRow && (bundle.allTaggings.isNotEmpty() || bundle.allSecondaryTaggings.isNotEmpty()),
+                enter = LedgerMotion.expandEnter(),
+                exit = LedgerMotion.shrinkExit()
             ) {
-                LazyRow(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(LedgerSurface)
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        .padding(vertical = 4.dp)
                 ) {
-                    item {
-                        FilterChip(
-                            selected = filter.selectedTagFilter == null,
-                            onClick = { viewModel.setTagFilter(null) },
-                            label = { Text("All Taggings") },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = LedgerCoral.copy(alpha = 0.22f),
-                                selectedLabelColor = LedgerCoral
-                            )
-                        )
+                    if (bundle.allTaggings.isNotEmpty()) {
+                        LazyRow(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (bundle.allSecondaryTaggings.isNotEmpty()) {
+                                item {
+                                    Text(
+                                        text = "Tag 1",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = LedgerTextMuted,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                            item {
+                                FilterChip(
+                                    selected = filter.selectedTagFilter == null,
+                                    onClick = { viewModel.setTagFilter(null) },
+                                    label = { Text(if (bundle.allSecondaryTaggings.isNotEmpty()) "All" else "All Taggings") },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = LedgerCoral.copy(alpha = 0.22f),
+                                        selectedLabelColor = LedgerCoral
+                                    ),
+                                    modifier = Modifier.testTag("tx_tag1_filter_all")
+                                )
+                            }
+                            items(bundle.allTaggings) { tagging ->
+                                FilterChip(
+                                    selected = filter.selectedTagFilter == tagging,
+                                    onClick = {
+                                        viewModel.setTagFilter(if (filter.selectedTagFilter == tagging) null else tagging)
+                                    },
+                                    label = { Text(tagging) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = LedgerCoral.copy(alpha = 0.22f),
+                                        selectedLabelColor = LedgerCoral
+                                    )
+                                )
+                            }
+                        }
                     }
-                    items(bundle.allTaggings) { tagging ->
-                        FilterChip(
-                            selected = filter.selectedTagFilter == tagging,
-                            onClick = {
-                                viewModel.setTagFilter(if (filter.selectedTagFilter == tagging) null else tagging)
-                            },
-                            label = { Text(tagging) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = LedgerCoral.copy(alpha = 0.22f),
-                                selectedLabelColor = LedgerCoral
-                            )
-                        )
+                    if (bundle.allSecondaryTaggings.isNotEmpty()) {
+                        LazyRow(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            item {
+                                Text(
+                                    text = "Tag 2",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = LedgerAmber,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            item {
+                                FilterChip(
+                                    selected = filter.selectedSecondaryTagFilter == null,
+                                    onClick = { viewModel.setSecondaryTagFilter(null) },
+                                    label = { Text("All") },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = LedgerAmber.copy(alpha = 0.22f),
+                                        selectedLabelColor = LedgerAmber
+                                    ),
+                                    modifier = Modifier.testTag("tx_tag2_filter_all")
+                                )
+                            }
+                            items(bundle.allSecondaryTaggings) { secTag ->
+                                FilterChip(
+                                    selected = filter.selectedSecondaryTagFilter == secTag,
+                                    onClick = {
+                                        viewModel.setSecondaryTagFilter(
+                                            if (filter.selectedSecondaryTagFilter == secTag) null else secTag
+                                        )
+                                    },
+                                    label = { Text(secTag) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = LedgerAmber.copy(alpha = 0.22f),
+                                        selectedLabelColor = LedgerAmber
+                                    )
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -298,12 +368,12 @@ fun TransactionsScreen(
                     val selected = filter.subTab == tab
                     val textColor by animateColorAsState(
                         targetValue = if (selected) LedgerTextPrimary else LedgerTextSecondary,
-                        animationSpec = tween(160),
+                        animationSpec = LedgerMotion.microTween(100),
                         label = "subtab_text_${tab.name}"
                     )
                     val indicatorColor by animateColorAsState(
                         targetValue = if (selected) LedgerCoral else Color.Transparent,
-                        animationSpec = tween(180),
+                        animationSpec = LedgerMotion.microTween(100),
                         label = "subtab_indicator_${tab.name}"
                     )
                     Column(
@@ -338,8 +408,8 @@ fun TransactionsScreen(
             // 3-Column Income / Expenses / Total Summary Strip
             AnimatedVisibility(
                 visible = filter.subTab != TransactionsSubTab.NOTE,
-                enter = expandVertically(tween(180)) + fadeIn(tween(150)),
-                exit = shrinkVertically(tween(150)) + fadeOut(tween(120))
+                enter = LedgerMotion.expandEnter(),
+                exit = LedgerMotion.shrinkExit()
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Row(
@@ -376,17 +446,7 @@ fun TransactionsScreen(
             AnimatedContent(
                 targetState = filter.subTab,
                 transitionSpec = {
-                    val dir = if (targetState.ordinal >= initialState.ordinal) 1 else -1
-                    (slideInHorizontally(
-                        animationSpec = tween(180, easing = FastOutSlowInEasing),
-                        initialOffsetX = { dir * (it / 16) }
-                    ) + fadeIn(tween(160)))
-                        .togetherWith(
-                            slideOutHorizontally(
-                                animationSpec = tween(140, easing = FastOutSlowInEasing),
-                                targetOffsetX = { -dir * (it / 20) }
-                            ) + fadeOut(tween(120))
-                        )
+                    LedgerMotion.tabSwitchTransform(forward = targetState.ordinal >= initialState.ordinal)
                 },
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 label = "tx_subtab_content"
@@ -851,6 +911,7 @@ fun TransactionRowItem(
                         modifier = Modifier.weight(1f, fill = false)
                     )
                     val displayTagging = tx.effectiveTagging()
+                    val displaySecondaryTagging = tx.effectiveSecondaryTagging()
                     if (displayTagging != null) {
                         Box(
                             modifier = Modifier
@@ -862,6 +923,25 @@ fun TransactionRowItem(
                                 text = displayTagging,
                                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
                                 color = LedgerTextSecondary,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                    if (displaySecondaryTagging != null) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(LedgerAmber.copy(alpha = 0.16f))
+                                .border(0.5.dp, LedgerAmber.copy(alpha = 0.45f), RoundedCornerShape(4.dp))
+                                .padding(horizontal = 5.dp, vertical = 1.dp)
+                        ) {
+                            Text(
+                                text = displaySecondaryTagging,
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                color = LedgerAmber,
+                                fontWeight = FontWeight.Medium,
                                 maxLines = 1,
                                 softWrap = false,
                                 overflow = TextOverflow.Ellipsis

@@ -65,6 +65,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -73,6 +74,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.LedgerTransaction
+import com.example.ui.theme.LedgerMotion
 import com.example.data.StatsPeriodType
 import com.example.ui.theme.LedgerBackground
 import com.example.ui.theme.LedgerBorder
@@ -479,12 +481,12 @@ private fun StatsTypeTab(
 ) {
     val textColor by animateColorAsState(
         targetValue = if (selected) LedgerTextPrimary else LedgerTextSecondary,
-        animationSpec = tween(160),
+        animationSpec = LedgerMotion.microTween(100),
         label = "stats_tab_text"
     )
     val indicatorColor by animateColorAsState(
         targetValue = if (selected) LedgerCoral else Color.Transparent,
-        animationSpec = tween(180),
+        animationSpec = LedgerMotion.microTween(110),
         label = "stats_tab_indicator"
     )
     Column(
@@ -529,7 +531,7 @@ private fun AnimatedLedgerPieChart(
         sweepProgress.snapTo(0f)
         sweepProgress.animateTo(
             targetValue = 1f,
-            animationSpec = tween(durationMillis = 420, easing = FastOutSlowInEasing)
+            animationSpec = LedgerMotion.chartTween(270)
         )
     }
 
@@ -554,19 +556,23 @@ private fun AnimatedLedgerPieChart(
     val labelTextSizePx = with(density) { 10.sp.toPx() }
     val subTextSizePx = with(density) { 9.sp.toPx() }
 
+    val canvasBgColor = LedgerBackground
+    val primaryLabelColor = LedgerTextPrimary
+    val secondaryLabelColor = LedgerTextSecondary
+
     // Hoisted native Paint objects so animation frames allocate zero objects
-    val titlePaint = remember(labelTextSizePx) {
+    val titlePaint = remember(labelTextSizePx, primaryLabelColor) {
         Paint().apply {
             isAntiAlias = true
-            color = android.graphics.Color.parseColor("#F3F4F6")
+            color = primaryLabelColor.toArgb()
             textSize = labelTextSizePx
             isFakeBoldText = true
         }
     }
-    val pctPaint = remember(subTextSizePx) {
+    val pctPaint = remember(subTextSizePx, secondaryLabelColor) {
         Paint().apply {
             isAntiAlias = true
-            color = android.graphics.Color.parseColor("#B8BDC8")
+            color = secondaryLabelColor.toArgb()
             textSize = subTextSizePx
         }
     }
@@ -598,7 +604,7 @@ private fun AnimatedLedgerPieChart(
                     size = arcSize
                 )
                 drawArc(
-                    color = LedgerBackground,
+                    color = canvasBgColor,
                     startAngle = startAngle,
                     sweepAngle = drawnSweep,
                     useCenter = true,
@@ -636,13 +642,13 @@ private fun AnimatedLedgerPieChart(
                 val horizontalEnd = Offset(clampedEndX, p2.y.coerceIn(18.dp.toPx(), size.height - 18.dp.toPx()))
 
                 drawLine(
-                    color = LedgerTextSecondary.copy(alpha = 0.65f * labelAlpha),
+                    color = secondaryLabelColor.copy(alpha = 0.65f * labelAlpha),
                     start = p1,
                     end = p2,
                     strokeWidth = 1.4f
                 )
                 drawLine(
-                    color = LedgerTextSecondary.copy(alpha = 0.65f * labelAlpha),
+                    color = secondaryLabelColor.copy(alpha = 0.65f * labelAlpha),
                     start = p2,
                     end = horizontalEnd,
                     strokeWidth = 1.4f

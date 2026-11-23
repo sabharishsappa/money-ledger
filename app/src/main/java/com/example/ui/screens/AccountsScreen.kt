@@ -42,6 +42,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
@@ -82,10 +83,12 @@ import androidx.compose.ui.unit.sp
 import com.example.data.Account
 import com.example.data.AccountNature
 import com.example.data.LedgerTransaction
+import com.example.ui.theme.LedgerAmber
 import com.example.ui.theme.LedgerBackground
 import com.example.ui.theme.LedgerBlue
 import com.example.ui.theme.LedgerBorder
 import com.example.ui.theme.LedgerCoral
+import com.example.ui.theme.LedgerMotion
 import com.example.ui.theme.LedgerDivider
 import com.example.ui.theme.LedgerSurface
 import com.example.ui.theme.LedgerSurfaceElevated
@@ -109,6 +112,7 @@ private data class AccountsTableWidths(
 )
 
 private data class NatureGroupSection(
+    val id: String,
     val nature: AccountNature,
     val title: String,
     val sections: List<com.example.viewmodel.AccountGroupSection>,
@@ -123,7 +127,6 @@ fun AccountsScreen(
     viewModel: LedgerViewModel,
     onSelectAccount: (Account) -> Unit,
     onOpenAccountsSetting: () -> Unit,
-    onOpenAccountGroups: () -> Unit,
     onMassUploadLedgers: () -> Unit,
     onCreateCategoryLedger: () -> Unit,
     modifier: Modifier = Modifier
@@ -133,38 +136,54 @@ fun AccountsScreen(
     var showOverflowMenu by remember { mutableStateOf(false) }
     var showSummaryBreakdown by remember { mutableStateOf(false) }
 
-    // Level 1 (Assets / Liabilities) are expanded by default; Level 2 (Account Groups) are collapsed by default
+    // Level 1 (Main Groups) are expanded by default; Level 2 (Sub Groups) are collapsed by default
     // so individual ledgers are hidden until the user taps a group or its expand button.
-    var collapsedNatures by remember { mutableStateOf(setOf<AccountNature>()) }
+    var collapsedMainGroupIds by remember { mutableStateOf(setOf<String>()) }
     var expandedGroupIds by remember { mutableStateOf(setOf<String>()) }
 
-    val taggings = bundle.allTaggings
+    val hasPrimaryTaggings = bundle.allTaggings.isNotEmpty()
+    val hasSecondaryTaggings = bundle.allSecondaryTaggings.isNotEmpty()
+    var useSecondaryTagSplit by remember(hasPrimaryTaggings, hasSecondaryTaggings) {
+        mutableStateOf(!hasPrimaryTaggings && hasSecondaryTaggings)
+    }
+    val activeSplitIsSecondary = useSecondaryTagSplit && hasSecondaryTaggings
+
+    val taggings = if (activeSplitIsSecondary) bundle.allSecondaryTaggings else bundle.allTaggings
     val showTagSplitColumns = taggings.isNotEmpty()
-    val includeUntaggedCol = showTagSplitColumns && bundle.hasAnyUntaggedBalance
+    val includeUntaggedCol = showTagSplitColumns && if (activeSplitIsSecondary) {
+        bundle.hasAnySecondaryUntaggedBalance
+    } else {
+        bundle.hasAnyUntaggedBalance
+    }
+    val grandTagTotals = if (activeSplitIsSecondary) bundle.grandSecondaryTagTotals else bundle.grandTagTotals
+    val grandUntaggedTotal = if (activeSplitIsSecondary) bundle.grandSecondaryUntaggedTotal else bundle.grandUntaggedTotal
     val sharedHScroll = rememberScrollState()
 
     val nonEmptySections = remember(bundle.accountSections) {
         bundle.accountSections.filter { it.accounts.isNotEmpty() }
     }
 
-    val natureSections = remember(nonEmptySections, taggings) {
-        listOf(
-            AccountNature.ASSET to "Assets",
-            AccountNature.LIABILITY to "Liabilities"
-        ).mapNotNull { (nature, title) ->
-            val matching = nonEmptySections.filter { it.group.nature() == nature }
+    val natureSections = remember(bundle.accountHierarchy, taggings, activeSplitIsSecondary) {
+        bundle.accountHierarchy.mapNotNull { entry ->
+            val matching = entry.subGroups.filter { it.accounts.isNotEmpty() }
             if (matching.isEmpty()) {
                 null
             } else {
                 NatureGroupSection(
-                    nature = nature,
-                    title = title,
+                    id = entry.mainGroup.id,
+                    nature = entry.mainGroup.accountNature(),
+                    title = entry.mainGroup.name,
                     sections = matching,
                     subtotal = matching.sumOf { it.subtotal },
                     tagSubtotals = taggings.associateWith { tag ->
-                        matching.sumOf { it.tagSubtotals[tag] ?: 0.0 }
+                        matching.sumOf { sec ->
+                            val map = if (activeSplitIsSecondary) sec.secondaryTagSubtotals else sec.tagSubtotals
+                            map[tag] ?: 0.0
+                        }
                     },
-                    untaggedSubtotal = matching.sumOf { it.untaggedSubtotal }
+                    untaggedSubtotal = matching.sumOf { sec ->
+                        if (activeSplitIsSecondary) sec.secondaryUntaggedSubtotal else sec.untaggedSubtotal
+                    }
                 )
             }
         }
@@ -239,7 +258,7 @@ fun AccountsScreen(
                         onClick = {
                             showOverflowMenu = false
                             if (expandedGroupIds.size < nonEmptySections.size) {
-                                collapsedNatures = emptySet()
+                                collapsedMainGroupIds = emptySet()
                                 expandedGroupIds = nonEmptySections.map { it.group.id }.toSet()
                             } else {
                                 expandedGroupIds = emptySet()
@@ -247,17 +266,10 @@ fun AccountsScreen(
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text("Manage Accounts", color = LedgerTextPrimary) },
+                        text = { Text("Account Settings", color = LedgerTextPrimary) },
                         onClick = {
                             showOverflowMenu = false
                             onOpenAccountsSetting()
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Account Groups", color = LedgerTextPrimary) },
-                        onClick = {
-                            showOverflowMenu = false
-                            onOpenAccountGroups()
                         }
                     )
                     DropdownMenuItem(
@@ -316,8 +328,8 @@ fun AccountsScreen(
 
         AnimatedVisibility(
             visible = showSummaryBreakdown,
-            enter = expandVertically(tween(200, easing = FastOutSlowInEasing)) + fadeIn(tween(160)),
-            exit = shrinkVertically(tween(160, easing = FastOutSlowInEasing)) + fadeOut(tween(120))
+            enter = LedgerMotion.expandEnter(),
+            exit = LedgerMotion.shrinkExit()
         ) {
             val posAssets = bundle.totalAssets.coerceAtLeast(0.0)
             val posLiabilities = bundle.totalLiabilities.coerceAtLeast(0.0)
@@ -325,7 +337,7 @@ fun AccountsScreen(
             val targetAssetFraction = (posAssets / totalMagnitude).toFloat().coerceIn(0f, 1f)
             val animatedAssetFraction by animateFloatAsState(
                 targetValue = targetAssetFraction,
-                animationSpec = tween(320, easing = FastOutSlowInEasing),
+                animationSpec = LedgerMotion.smoothSpring(),
                 label = "accounts_asset_ratio"
             )
             Column(
@@ -421,6 +433,52 @@ fun AccountsScreen(
                 }
 
                 Column(modifier = Modifier.fillMaxSize()) {
+                    // Tagging 1 / Tagging 2 Switcher Strip when both dimensions have data
+                    if (hasPrimaryTaggings && hasSecondaryTaggings) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(LedgerSurface)
+                                .padding(horizontal = 12.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Balance Split By",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = LedgerTextSecondary
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .background(LedgerBackground, RoundedCornerShape(8.dp))
+                                    .padding(2.dp),
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                val tabs = listOf(false to "Tagging 1", true to "Tagging 2")
+                                tabs.forEach { (isSec, title) ->
+                                    val selected = activeSplitIsSecondary == isSec
+                                    val chipColor = if (isSec) LedgerAmber else LedgerCoral
+                                    Surface(
+                                        onClick = { useSecondaryTagSplit = isSec },
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = if (selected) chipColor.copy(alpha = 0.2f) else Color.Transparent,
+                                        border = if (selected) BorderStroke(1.dp, chipColor.copy(alpha = 0.6f)) else null,
+                                        modifier = Modifier.testTag(if (isSec) "accounts_split_tag2_tab" else "accounts_split_tag1_tab")
+                                    ) {
+                                        Text(
+                                            text = title,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                            color = if (selected) chipColor else LedgerTextSecondary,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                    }
+
                     // Sticky Column Header + Tagging-Wise Totals Row on Top
                     if (showTagSplitColumns) {
                         TagSplitHeaderRow(
@@ -432,11 +490,11 @@ fun AccountsScreen(
                         HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
                         TagSplitDataRow(
                             label = "Total",
-                            subtitle = "Tagging-wise",
+                            subtitle = if (activeSplitIsSecondary) "Tagging 2-wise" else "Tagging-wise",
                             taggings = taggings,
-                            tagValues = bundle.grandTagTotals,
+                            tagValues = grandTagTotals,
                             includeUntagged = includeUntaggedCol,
-                            untaggedValue = bundle.grandUntaggedTotal,
+                            untaggedValue = grandUntaggedTotal,
                             totalValue = bundle.netTotal,
                             symbol = symbol,
                             scrollState = sharedHScroll,
@@ -449,24 +507,27 @@ fun AccountsScreen(
                         HorizontalDivider(color = LedgerBorder, thickness = 1.dp)
                     }
 
+                    val assetAccentBlue = LedgerBlue
+                    val liabAccentCoral = LedgerCoral
+
                     LazyColumn(
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                         contentPadding = PaddingValues(bottom = 24.dp)
                     ) {
                         natureSections.forEach { natureSection ->
-                            val isNatureExpanded = natureSection.nature !in collapsedNatures
-                            val accentColor = if (natureSection.nature == AccountNature.ASSET) LedgerBlue else LedgerCoral
+                            val isNatureExpanded = natureSection.id !in collapsedMainGroupIds
+                            val accentColor = if (natureSection.nature == AccountNature.ASSET) assetAccentBlue else liabAccentCoral
                             val toggleNature = {
-                                collapsedNatures = if (isNatureExpanded) {
-                                    collapsedNatures + natureSection.nature
+                                collapsedMainGroupIds = if (isNatureExpanded) {
+                                    collapsedMainGroupIds + natureSection.id
                                 } else {
-                                    collapsedNatures - natureSection.nature
+                                    collapsedMainGroupIds - natureSection.id
                                 }
                             }
 
-                            // Level 1: Assets / Liabilities Top Group Header
-                            item(key = "nature_hdr_${natureSection.nature.name}", contentType = "nature_hdr") {
-                                val groupCountText = if (natureSection.sections.size == 1) "1 group" else "${natureSection.sections.size} groups"
+                            // Level 1: Main Group Header
+                            item(key = "nature_hdr_${natureSection.id}", contentType = "nature_hdr") {
+                                val groupCountText = if (natureSection.sections.size == 1) "1 sub group" else "${natureSection.sections.size} sub groups"
                                 Column(modifier = Modifier.animateItem()) {
                                     if (showTagSplitColumns) {
                                         TagSplitDataRow(
@@ -484,14 +545,14 @@ fun AccountsScreen(
                                             rowTier = AccountRowTier.NATURE_HEADER,
                                             isExpanded = isNatureExpanded,
                                             accentColor = accentColor,
-                                            modifier = Modifier.testTag("account_nature_header_${natureSection.nature.name.lowercase()}"),
+                                            modifier = Modifier.testTag("account_nature_header_${natureSection.id}"),
                                             onClick = toggleNature
                                         )
                                     } else {
                                         val chevronRot by animateFloatAsState(
                                             targetValue = if (isNatureExpanded) 90f else 0f,
                                             animationSpec = tween(180),
-                                            label = "nature_chevron_${natureSection.nature.name}"
+                                            label = "nature_chevron_${natureSection.id}"
                                         )
                                         Row(
                                             modifier = Modifier
@@ -500,7 +561,7 @@ fun AccountsScreen(
                                                 .background(LedgerSurfaceElevated)
                                                 .clickable(onClick = toggleNature)
                                                 .padding(start = 10.dp, end = 14.dp, top = 10.dp, bottom = 10.dp)
-                                                .testTag("account_nature_header_${natureSection.nature.name.lowercase()}"),
+                                                .testTag("account_nature_header_${natureSection.id}"),
                                             horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
@@ -571,9 +632,9 @@ fun AccountsScreen(
                                                     label = section.group.name,
                                                     subtitle = ledgerCountText,
                                                     taggings = taggings,
-                                                    tagValues = section.tagSubtotals,
+                                                    tagValues = if (activeSplitIsSecondary) section.secondaryTagSubtotals else section.tagSubtotals,
                                                     includeUntagged = includeUntaggedCol,
-                                                    untaggedValue = section.untaggedSubtotal,
+                                                    untaggedValue = if (activeSplitIsSecondary) section.secondaryUntaggedSubtotal else section.untaggedSubtotal,
                                                     totalValue = section.subtotal,
                                                     symbol = symbol,
                                                     scrollState = sharedHScroll,
@@ -679,9 +740,9 @@ fun AccountsScreen(
                                                         label = item.account.name,
                                                         subtitle = accountSubtitle,
                                                         taggings = taggings,
-                                                        tagValues = item.tagBalances,
+                                                        tagValues = if (activeSplitIsSecondary) item.secondaryTagBalances else item.tagBalances,
                                                         includeUntagged = includeUntaggedCol,
-                                                        untaggedValue = item.untaggedBalance,
+                                                        untaggedValue = if (activeSplitIsSecondary) item.secondaryUntaggedBalance else item.untaggedBalance,
                                                         totalValue = item.balance,
                                                         symbol = symbol,
                                                         scrollState = sharedHScroll,
@@ -1120,6 +1181,8 @@ fun AccountDetailScreen(
     val liveBalance = bundle.accountBalances[account.id] ?: account.initialBalance
     val tagSplits = bundle.accountTagBalances[account.id].orEmpty()
     val untaggedBal = bundle.accountUntaggedBalances[account.id] ?: account.initialBalance
+    val secondaryTagSplits = bundle.accountSecondaryTagBalances[account.id].orEmpty()
+    val secondaryUntaggedBal = bundle.accountSecondaryUntaggedBalances[account.id] ?: account.initialBalance
     val groupName = bundle.accountGroups.firstOrNull { it.id == account.groupId }?.name ?: "Account"
     val accountTransactions = remember(bundle.transactions, account.id) {
         bundle.transactions.filter { it.accountId == account.id || it.toAccountId == account.id }
@@ -1217,7 +1280,7 @@ fun AccountDetailScreen(
                     HorizontalDivider(color = LedgerDivider)
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = "Balance Split by Tagging",
+                        text = if (secondaryTagSplits.isNotEmpty()) "Balance Split by Tagging 1" else "Balance Split by Tagging",
                         style = MaterialTheme.typography.labelMedium,
                         color = LedgerTextSecondary
                     )
@@ -1245,6 +1308,44 @@ fun AccountDetailScreen(
                                 text = LedgerFormatters.formatSignedWhole(untaggedBal, symbol),
                                 style = TabularAmountStyle.copy(fontSize = 13.sp),
                                 color = if (untaggedBal.roundToLong() < 0L) LedgerCoral else LedgerBlue
+                            )
+                        }
+                    }
+                }
+
+                if (secondaryTagSplits.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HorizontalDivider(color = LedgerDivider)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "Balance Split by Tagging 2",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = LedgerAmber
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    secondaryTagSplits.entries.sortedBy { it.key }.forEach { (tagName, tagBal) ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(tagName, style = MaterialTheme.typography.bodySmall, color = LedgerTextPrimary)
+                            Text(
+                                text = LedgerFormatters.formatSignedWhole(tagBal, symbol),
+                                style = TabularAmountStyle.copy(fontSize = 13.sp),
+                                color = if (tagBal.roundToLong() < 0L) LedgerCoral else LedgerBlue
+                            )
+                        }
+                    }
+                    if (secondaryUntaggedBal.roundToLong() != 0L) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Untagged", style = MaterialTheme.typography.bodySmall, color = LedgerTextMuted)
+                            Text(
+                                text = LedgerFormatters.formatSignedWhole(secondaryUntaggedBal, symbol),
+                                style = TabularAmountStyle.copy(fontSize = 13.sp),
+                                color = if (secondaryUntaggedBal.roundToLong() < 0L) LedgerCoral else LedgerBlue
                             )
                         }
                     }
@@ -1330,29 +1431,32 @@ fun AccountEditorDialog(
     ) -> Unit
 ) {
     val activeGroups = bundle.activeGroups
-    var selectedGroupId by remember(existing) {
+    var selectedGroupId by remember(existing, activeGroups) {
         mutableStateOf(existing?.groupId ?: activeGroups.firstOrNull()?.id.orEmpty())
     }
     var name by remember(existing) { mutableStateOf(existing?.name.orEmpty()) }
     var balanceText by remember(existing) {
         mutableStateOf(if (existing != null) existing.initialBalance.roundToLong().toString() else "0")
     }
-    var nature by remember(existing) {
-        mutableStateOf(existing?.nature() ?: AccountNature.ASSET)
-    }
     var note by remember(existing) { mutableStateOf(existing?.note.orEmpty()) }
     var includeInNetWorth by remember(existing) { mutableStateOf(existing?.includeInNetWorth ?: true) }
     var groupMenuExpanded by remember { mutableStateOf(false) }
 
-    val selectedGroupName = activeGroups.firstOrNull { it.id == selectedGroupId }?.name ?: "Select Group"
+    val selectedGroup = activeGroups.firstOrNull { it.id == selectedGroupId } ?: activeGroups.firstOrNull()
+    val selectedGroupName = selectedGroup?.name ?: "Select Sub Group"
+    val selectedMainGroupName = selectedGroup?.let { bundle.mainGroupNameFor(it) }
+    val nature = selectedGroup?.let { bundle.groupNatureById[it.id] ?: it.nature() }
+        ?: existing?.nature()
+        ?: AccountNature.ASSET
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = LedgerSurface,
         title = {
             Text(
-                text = if (existing == null) "Add Account" else "Edit Account",
-                color = LedgerTextPrimary
+                text = if (existing == null) "New Ledger" else "Edit Ledger",
+                color = LedgerTextPrimary,
+                fontWeight = FontWeight.SemiBold
             )
         },
         text = {
@@ -1360,29 +1464,80 @@ fun AccountEditorDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.verticalScroll(rememberScrollState())
             ) {
-                Box {
-                    OutlinedButton(
-                        onClick = { groupMenuExpanded = true },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp),
-                        border = BorderStroke(1.dp, LedgerBorder)
-                    ) {
-                        Text("Group: $selectedGroupName", color = LedgerTextPrimary)
-                    }
-                    DropdownMenu(
-                        expanded = groupMenuExpanded,
-                        onDismissRequest = { groupMenuExpanded = false },
-                        containerColor = LedgerSurfaceElevated
-                    ) {
-                        activeGroups.forEach { grp ->
-                            DropdownMenuItem(
-                                text = { Text(grp.name, color = LedgerTextPrimary) },
-                                onClick = {
-                                    selectedGroupId = grp.id
-                                    nature = grp.nature()
-                                    groupMenuExpanded = false
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "Sub Group",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = LedgerTextSecondary
+                    )
+                    Box {
+                        OutlinedButton(
+                            onClick = { groupMenuExpanded = true },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("ledger_sub_group_selector"),
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(1.dp, LedgerBorder)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = selectedGroupName,
+                                        color = LedgerTextPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (!selectedMainGroupName.isNullOrBlank()) {
+                                        Text(
+                                            text = "Main Group: $selectedMainGroupName",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = LedgerTextMuted,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
                                 }
-                            )
+                                Icon(
+                                    imageVector = Icons.Filled.ArrowDropDown,
+                                    contentDescription = "Choose Sub Group",
+                                    tint = LedgerTextSecondary
+                                )
+                            }
+                        }
+                        DropdownMenu(
+                            expanded = groupMenuExpanded,
+                            onDismissRequest = { groupMenuExpanded = false },
+                            containerColor = LedgerSurfaceElevated
+                        ) {
+                            activeGroups.forEach { grp ->
+                                val parentName = bundle.mainGroupNameFor(grp)
+                                val isChosen = grp.id == selectedGroup?.id
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text(
+                                                text = grp.name,
+                                                color = if (isChosen) LedgerCoral else LedgerTextPrimary,
+                                                fontWeight = if (isChosen) FontWeight.SemiBold else FontWeight.Normal
+                                            )
+                                            Text(
+                                                text = parentName,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = LedgerTextMuted
+                                            )
+                                        }
+                                    },
+                                    onClick = {
+                                        selectedGroupId = grp.id
+                                        groupMenuExpanded = false
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -1390,8 +1545,8 @@ fun AccountEditorDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it.take(80) },
-                    label = { Text("Account Name") },
-                    placeholder = { Text("e.g. HDFC | Home, Mutual Funds") },
+                    label = { Text("Ledger Name") },
+                    placeholder = { Text("e.g. HDFC Savings, Wallet, Credit Card") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("account_name_input")
                 )
@@ -1408,30 +1563,6 @@ fun AccountEditorDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("account_opening_balance_input")
                 )
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    AccountNature.entries.forEach { opt ->
-                        val active = nature == opt
-                        val tint = if (opt == AccountNature.ASSET) LedgerBlue else LedgerCoral
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (active) tint.copy(alpha = 0.2f) else LedgerSurfaceElevated,
-                            border = BorderStroke(1.dp, if (active) tint else LedgerBorder),
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable { nature = opt }
-                                .padding(vertical = 8.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = if (opt == AccountNature.ASSET) "Asset" else "Liability",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = if (active) tint else LedgerTextSecondary
-                                )
-                            }
-                        }
-                    }
-                }
 
                 Surface(
                     shape = RoundedCornerShape(10.dp),

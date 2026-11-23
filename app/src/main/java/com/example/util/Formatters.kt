@@ -5,7 +5,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
-import com.example.ui.theme.LedgerCoral
+import com.example.ui.theme.DefaultLedgerCoral
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -147,7 +147,7 @@ object LedgerFormatters {
         }
     }
 
-    fun parseColorHex(hex: String, fallback: Color = LedgerCoral): Color {
+    fun parseColorHex(hex: String, fallback: Color = DefaultLedgerCoral): Color {
         if (hex.isBlank()) return fallback
         colorCache[hex]?.let { return it }
         val parsed = try {

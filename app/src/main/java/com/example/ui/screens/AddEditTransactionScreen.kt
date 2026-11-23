@@ -112,6 +112,7 @@ import com.example.ui.theme.LedgerBackground
 import com.example.ui.theme.LedgerBlue
 import com.example.ui.theme.LedgerBorder
 import com.example.ui.theme.LedgerCoral
+import com.example.ui.theme.LedgerMotion
 import com.example.ui.theme.LedgerDivider
 import com.example.ui.theme.LedgerSurface
 import com.example.ui.theme.LedgerSurfaceElevated
@@ -223,11 +224,13 @@ fun AddEditTransactionScreen(
     var categoryFieldFocused by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var noteFieldFocused by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var taggingFieldFocused by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var secondaryTaggingFieldFocused by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var showAccountSuggestions by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var showToAccountSuggestions by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var showCategorySuggestions by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var showNoteSuggestions by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var showTaggingSuggestions by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var showSecondaryTaggingSuggestions by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var hasTypedAccountQuery by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var hasTypedToAccountQuery by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var hasTypedCategoryQuery by remember(existing, draft, draftKey) { mutableStateOf(false) }
@@ -249,6 +252,7 @@ fun AddEditTransactionScreen(
     }
     var noteText by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.note.orEmpty()) }
     var taggingText by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.effectiveTagging().orEmpty()) }
+    var secondaryTaggingText by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.effectiveSecondaryTagging().orEmpty()) }
     var descriptionText by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.description.orEmpty()) }
     var favorite by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.favorite ?: false) }
     var repeatFreq by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.repeat() ?: RepeatFrequency.NONE) }
@@ -268,7 +272,8 @@ fun AddEditTransactionScreen(
         showToAccountSuggestions ||
         showCategorySuggestions ||
         showNoteSuggestions ||
-        showTaggingSuggestions
+        showTaggingSuggestions ||
+        showSecondaryTaggingSuggestions
     BackHandler {
         when {
             anySuggestionsOpen -> {
@@ -277,6 +282,7 @@ fun AddEditTransactionScreen(
                 showCategorySuggestions = false
                 showNoteSuggestions = false
                 showTaggingSuggestions = false
+                showSecondaryTaggingSuggestions = false
             }
             activePicker != ActivePicker.NONE -> {
                 activePicker = ActivePicker.NONE
@@ -452,6 +458,35 @@ fun AddEditTransactionScreen(
             }
     }
 
+    val allSecondaryTaggingSuggestions = remember(bundle.transactions) {
+        val counts = mutableMapOf<String, Int>()
+        val latestLabel = mutableMapOf<String, String>()
+        val latestOrder = mutableMapOf<String, Long>()
+        bundle.transactions.forEach { tx ->
+            val clean = tx.effectiveSecondaryTagging()?.trim().orEmpty()
+            if (clean.isNotEmpty()) {
+                val key = clean.lowercase()
+                counts[key] = (counts[key] ?: 0) + 1
+                val recency = tx.epochDay * 1_000_000L + (tx.timestampMillis % 1_000_000L)
+                if (recency >= (latestOrder[key] ?: Long.MIN_VALUE)) {
+                    latestOrder[key] = recency
+                    latestLabel[key] = clean
+                }
+            }
+        }
+        counts.entries
+            .sortedWith(
+                compareByDescending<Map.Entry<String, Int>> { it.value }
+                    .thenByDescending { latestOrder[it.key] ?: 0L }
+            )
+            .map { (key, count) ->
+                TextSuggestionItem(
+                    text = latestLabel[key] ?: key,
+                    usageCount = count
+                )
+            }
+    }
+
     fun filterTextSuggestions(
         allItems: List<TextSuggestionItem>,
         query: String
@@ -481,6 +516,7 @@ fun AddEditTransactionScreen(
         showCategorySuggestions = false
         showNoteSuggestions = false
         showTaggingSuggestions = false
+        showSecondaryTaggingSuggestions = false
         activePicker = if (activePicker == picker) ActivePicker.NONE else picker
     }
 
@@ -584,6 +620,7 @@ fun AddEditTransactionScreen(
             } else null,
             note = noteText.trim(),
             tagging = taggingText.trim().takeIf { it.isNotBlank() },
+            secondaryTagging = secondaryTaggingText.trim().takeIf { it.isNotBlank() },
             description = descriptionText.trim().takeIf { it.isNotBlank() },
             tags = emptyList(),
             favorite = favorite,
@@ -599,6 +636,7 @@ fun AddEditTransactionScreen(
             feeText = ""
             noteText = ""
             taggingText = ""
+            secondaryTaggingText = ""
             descriptionText = ""
         }
     }
@@ -621,8 +659,8 @@ fun AddEditTransactionScreen(
         onCopy?.invoke(copiedModel)
     }
 
-    val suggestionEnter = remember { expandVertically(tween(160)) + fadeIn(tween(140)) }
-    val suggestionExit = remember { shrinkVertically(tween(140)) + fadeOut(tween(110)) }
+    val suggestionEnter = remember { LedgerMotion.expandEnter() }
+    val suggestionExit = remember { LedgerMotion.shrinkExit() }
 
     BoxWithConstraints(
         modifier = Modifier
@@ -771,17 +809,17 @@ fun AddEditTransactionScreen(
                     }
                     val borderColor by animateColorAsState(
                         targetValue = targetBorder,
-                        animationSpec = tween(180),
+                        animationSpec = LedgerMotion.microTween(100),
                         label = "seg_border_${option.name}"
                     )
                     val textColor by animateColorAsState(
                         targetValue = targetText,
-                        animationSpec = tween(180),
+                        animationSpec = LedgerMotion.microTween(100),
                         label = "seg_text_${option.name}"
                     )
                     val containerColor by animateColorAsState(
                         targetValue = if (isSelected) LedgerSurfaceElevated else LedgerSurface,
-                        animationSpec = tween(180),
+                        animationSpec = LedgerMotion.microTween(100),
                         label = "seg_bg_${option.name}"
                     )
                     val label = when (option) {
@@ -980,6 +1018,7 @@ fun AddEditTransactionScreen(
                                         showCategorySuggestions = false
                                         showNoteSuggestions = false
                                         showTaggingSuggestions = false
+                                        showSecondaryTaggingSuggestions = false
                                         showAccountSuggestions = false
                                     } else {
                                         showAccountSuggestions = false
@@ -1081,6 +1120,7 @@ fun AddEditTransactionScreen(
                                         showCategorySuggestions = false
                                         showNoteSuggestions = false
                                         showTaggingSuggestions = false
+                                        showSecondaryTaggingSuggestions = false
                                         showToAccountSuggestions = false
                                     } else {
                                         showToAccountSuggestions = false
@@ -1181,6 +1221,7 @@ fun AddEditTransactionScreen(
                                         showCategorySuggestions = false
                                         showNoteSuggestions = false
                                         showTaggingSuggestions = false
+                                        showSecondaryTaggingSuggestions = false
                                         showAccountSuggestions = false
                                     } else {
                                         showAccountSuggestions = false
@@ -1309,6 +1350,7 @@ fun AddEditTransactionScreen(
                                         showAccountSuggestions = false
                                         showNoteSuggestions = false
                                         showTaggingSuggestions = false
+                                        showSecondaryTaggingSuggestions = false
                                         showCategorySuggestions = false
                                     } else {
                                         showCategorySuggestions = false
@@ -1490,6 +1532,7 @@ fun AddEditTransactionScreen(
                                     showToAccountSuggestions = false
                                     showCategorySuggestions = false
                                     showTaggingSuggestions = false
+                                    showSecondaryTaggingSuggestions = false
                                     showNoteSuggestions = false
                                 } else {
                                     showNoteSuggestions = false
@@ -1500,7 +1543,7 @@ fun AddEditTransactionScreen(
                 }
             }
 
-            // Tagging Row (Styled identically to Note, with floating type-ahead matching suggestions)
+            // Tagging 1 Row (Styled identically to Note, with floating type-ahead matching suggestions)
             val matchingTags = remember(allTaggingSuggestions, taggingText, showTaggingSuggestions, taggingFieldFocused) {
                 if (showTaggingSuggestions && taggingFieldFocused && taggingText.trim().isNotEmpty()) {
                     filterTextSuggestions(allTaggingSuggestions, taggingText)
@@ -1577,12 +1620,106 @@ fun AddEditTransactionScreen(
                                     showToAccountSuggestions = false
                                     showCategorySuggestions = false
                                     showNoteSuggestions = false
+                                    showSecondaryTaggingSuggestions = false
                                     showTaggingSuggestions = false
                                 } else {
                                     showTaggingSuggestions = false
                                 }
                             }
                             .testTag("tx_tagging_input")
+                    )
+                }
+            }
+
+            // Tagging 2 Row (Independent second tagging dimension for separate tracking)
+            val matchingSecondaryTags = remember(
+                allSecondaryTaggingSuggestions,
+                secondaryTaggingText,
+                showSecondaryTaggingSuggestions,
+                secondaryTaggingFieldFocused
+            ) {
+                if (showSecondaryTaggingSuggestions && secondaryTaggingFieldFocused && secondaryTaggingText.trim().isNotEmpty()) {
+                    filterTextSuggestions(allSecondaryTaggingSuggestions, secondaryTaggingText)
+                } else {
+                    emptyList()
+                }
+            }
+            FieldWithFloatingSuggestions(
+                showSuggestions = matchingSecondaryTags.isNotEmpty(),
+                startIndent = labelWidth,
+                suggestionsContent = {
+                    TextSuggestionList(
+                        suggestions = matchingSecondaryTags,
+                        currentValue = secondaryTaggingText,
+                        accentColor = accentColor,
+                        listTestTag = "tx_secondary_tagging_suggestions_list",
+                        itemTestTagPrefix = "tx_secondary_tagging_suggestion_",
+                        onSelect = { selected ->
+                            secondaryTaggingText = selected.text
+                            showSecondaryTaggingSuggestions = false
+                            focusManager.clearFocus()
+                        }
+                    )
+                }
+            ) {
+                FormFieldRow(
+                    label = "Tagging 2",
+                    labelWidth = labelWidth,
+                    isActive = secondaryTaggingFieldFocused,
+                    activeAccent = accentColor,
+                    onClick = { activePicker = ActivePicker.NONE },
+                    trailing = if (secondaryTaggingText.isNotEmpty()) {
+                        {
+                            IconButton(
+                                onClick = {
+                                    secondaryTaggingText = ""
+                                    showSecondaryTaggingSuggestions = false
+                                },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Close,
+                                    contentDescription = "Clear second tagging",
+                                    tint = LedgerTextMuted,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    } else null
+                ) {
+                    BasicTextField(
+                        value = secondaryTaggingText,
+                        onValueChange = { typed ->
+                            secondaryTaggingText = typed.take(60)
+                            showSecondaryTaggingSuggestions = typed.trim().isNotEmpty()
+                            activePicker = ActivePicker.NONE
+                        },
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = LedgerTextPrimary),
+                        singleLine = true,
+                        cursorBrush = SolidColor(accentColor),
+                        decorationBox = { inner ->
+                            if (secondaryTaggingText.isEmpty()) {
+                                Text("e.g. Project, Trip, Tax (Separate)", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
+                            }
+                            inner()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onFocusChanged { state ->
+                                secondaryTaggingFieldFocused = state.isFocused
+                                if (state.isFocused) {
+                                    activePicker = ActivePicker.NONE
+                                    showAccountSuggestions = false
+                                    showToAccountSuggestions = false
+                                    showCategorySuggestions = false
+                                    showNoteSuggestions = false
+                                    showTaggingSuggestions = false
+                                    showSecondaryTaggingSuggestions = false
+                                } else {
+                                    showSecondaryTaggingSuggestions = false
+                                }
+                            }
+                            .testTag("tx_secondary_tagging_input")
                     )
                 }
             }
@@ -1717,8 +1854,8 @@ fun AddEditTransactionScreen(
         // Bottom Interactive Picker Drawer (Smooth slide-in/out & responsive height)
         AnimatedVisibility(
             visible = activePicker != ActivePicker.NONE,
-            enter = slideInVertically(tween(200)) { it } + fadeIn(tween(160)),
-            exit = slideOutVertically(tween(170)) { it } + fadeOut(tween(120))
+            enter = slideInVertically(LedgerMotion.snappyTween(140)) { it } + fadeIn(LedgerMotion.microTween(110)),
+            exit = slideOutVertically(LedgerMotion.microTween(115)) { it } + fadeOut(LedgerMotion.microTween(90))
         ) {
             val shownPicker = if (activePicker != ActivePicker.NONE) activePicker else lastVisiblePicker
             Surface(
@@ -2505,12 +2642,12 @@ private fun FormFieldRow(
 ) {
     val dividerColor by animateColorAsState(
         targetValue = if (isActive) activeAccent else LedgerDivider,
-        animationSpec = tween(160),
+        animationSpec = LedgerMotion.microTween(100),
         label = "field_div_color_$label"
     )
     val dividerThickness by animateDpAsState(
         targetValue = if (isActive) 1.5.dp else 1.dp,
-        animationSpec = tween(160),
+        animationSpec = LedgerMotion.microTween(100),
         label = "field_div_thick_$label"
     )
     Column(

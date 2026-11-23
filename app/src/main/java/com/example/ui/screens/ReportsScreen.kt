@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -97,6 +98,7 @@ import com.example.ui.theme.LedgerBorder
 import com.example.ui.theme.LedgerCoral
 import com.example.ui.theme.LedgerDivider
 import com.example.ui.theme.LedgerGreen
+import com.example.ui.theme.LedgerMotion
 import com.example.ui.theme.LedgerSurface
 import com.example.ui.theme.LedgerSurfaceElevated
 import com.example.ui.theme.LedgerSurfaceHighlight
@@ -123,7 +125,8 @@ private enum class AvailableReport(val title: String) {
     NET_WORTH("Net Worth"),
     CREDIT_CARDS("Credit Cards"),
     SPENDING_TRENDS("Spending Trends"),
-    MONTHLY_BUDGET("Monthly Budget")
+    MONTHLY_BUDGET("Monthly Budget"),
+    TAGGING_TRACKER("Tagging Tracker")
 }
 
 @Composable
@@ -239,6 +242,7 @@ fun ReportsScreen(
                         AvailableReport.CREDIT_CARDS -> "Credit card spending, payments & dues"
                         AvailableReport.SPENDING_TRENDS -> "Past 6 months by expense category"
                         AvailableReport.MONTHLY_BUDGET -> "Category spending limits & usage progress"
+                        AvailableReport.TAGGING_TRACKER -> "Track Tagging 1 & Tagging 2 separately"
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = LedgerTextSecondary,
@@ -251,7 +255,7 @@ fun ReportsScreen(
             if (openedReport == AvailableReport.NET_WORTH || openedReport == AvailableReport.CREDIT_CARDS) {
                 val chevronRot by animateFloatAsState(
                     targetValue = if (showPeriodDropdown) 180f else 0f,
-                    animationSpec = tween(180),
+                    animationSpec = LedgerMotion.quickSpring(),
                     label = "reports_dropdown_chevron"
                 )
                 Box {
@@ -328,13 +332,7 @@ fun ReportsScreen(
             targetState = openedReport,
             transitionSpec = {
                 val goingBack = targetState == null
-                if (goingBack) {
-                    (slideInHorizontally(tween(190)) { -it / 5 } + fadeIn(tween(180))) togetherWith
-                        (slideOutHorizontally(tween(160)) { it / 5 } + fadeOut(tween(130)))
-                } else {
-                    (slideInHorizontally(tween(190)) { it / 5 } + fadeIn(tween(180))) togetherWith
-                        (slideOutHorizontally(tween(160)) { -it / 5 } + fadeOut(tween(130)))
-                }
+                LedgerMotion.pushPopTransform(goingBack = goingBack)
             },
             modifier = Modifier.weight(1f).fillMaxWidth(),
             label = "reports_navigation_content"
@@ -450,6 +448,24 @@ fun ReportsScreen(
                                         onClick = { openedReport = AvailableReport.MONTHLY_BUDGET },
                                         modifier = Modifier.testTag("reports_list_item_monthly_budget")
                                     )
+                                    HorizontalDivider(
+                                        color = LedgerDivider,
+                                        modifier = Modifier.padding(start = 66.dp)
+                                    )
+                                    val tag1Count = bundle.allTaggings.size
+                                    val tag2Count = bundle.allSecondaryTaggings.size
+                                    ReportListItemRow(
+                                        icon = Icons.Filled.Label,
+                                        iconTint = LedgerAmber,
+                                        title = "Tagging Tracker",
+                                        subtitle = "Track Tagging 1 & Tagging 2 separately",
+                                        previewValue = if (tag1Count > 0 || tag2Count > 0) {
+                                            "T1: $tag1Count • T2: $tag2Count"
+                                        } else null,
+                                        previewColor = LedgerAmber,
+                                        onClick = { openedReport = AvailableReport.TAGGING_TRACKER },
+                                        modifier = Modifier.testTag("reports_list_item_tagging_tracker")
+                                    )
                                 }
                                 HorizontalDivider(color = LedgerDivider)
 
@@ -503,6 +519,14 @@ fun ReportsScreen(
                         viewModel = viewModel,
                         onEditTransaction = onEditTransaction,
                         onAddExpense = onAddExpense,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+
+                AvailableReport.TAGGING_TRACKER -> {
+                    TaggingTrackerContent(
+                        bundle = bundle,
+                        onEditTransaction = onEditTransaction,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -672,7 +696,7 @@ private fun NetWorthHeroCard(
     }
     val netColor by animateColorAsState(
         targetValue = targetNetColor,
-        animationSpec = tween(220),
+        animationSpec = LedgerMotion.microTween(120),
         label = "net_worth_color"
     )
 
@@ -713,9 +737,7 @@ private fun NetWorthHeroCard(
 
             AnimatedContent(
                 targetState = LedgerFormatters.formatSignedWhole(point.netWorth, symbol),
-                transitionSpec = {
-                    fadeIn(tween(170)).togetherWith(fadeOut(tween(120)))
-                },
+                transitionSpec = { LedgerMotion.fastFadeTransform() },
                 label = "net_worth_value_anim"
             ) { formattedNet ->
                 Text(
@@ -820,7 +842,7 @@ private fun NetWorthChartCard(
         animProgress.snapTo(0f)
         animProgress.animateTo(
             targetValue = 1f,
-            animationSpec = tween(durationMillis = 380, easing = FastOutSlowInEasing)
+            animationSpec = LedgerMotion.chartTween(260)
         )
     }
 
@@ -948,6 +970,14 @@ private fun NetWorthChartCard(
                     }
                     val totalChartWidth = slotWidthDp * series.size.coerceAtLeast(1)
 
+                    val chartDividerColor = LedgerDivider
+                    val chartHighlightColor = LedgerSurfaceHighlight
+                    val chartBlueColor = LedgerBlue
+                    val chartCoralColor = LedgerCoral
+                    val chartBorderColor = LedgerBorder
+                    val chartAmberColor = LedgerAmber
+                    val chartSurfaceColor = LedgerSurface
+
                     Column(
                         modifier = Modifier
                             .fillMaxHeight()
@@ -981,7 +1011,7 @@ private fun NetWorthChartCard(
 
                             // Horizontal Gridlines
                             drawLine(
-                                color = LedgerDivider.copy(alpha = 0.6f),
+                                color = chartDividerColor.copy(alpha = 0.6f),
                                 start = Offset(0f, topPad),
                                 end = Offset(size.width, topPad),
                                 strokeWidth = 1.dp.toPx(),
@@ -990,7 +1020,7 @@ private fun NetWorthChartCard(
                             if (niceNeg <= 0.0) {
                                 val midY = topPad + plotHeight * 0.5f
                                 drawLine(
-                                    color = LedgerDivider.copy(alpha = 0.5f),
+                                    color = chartDividerColor.copy(alpha = 0.5f),
                                     start = Offset(0f, midY),
                                     end = Offset(size.width, midY),
                                     strokeWidth = 1.dp.toPx(),
@@ -998,7 +1028,7 @@ private fun NetWorthChartCard(
                                 )
                             } else {
                                 drawLine(
-                                    color = LedgerDivider.copy(alpha = 0.6f),
+                                    color = chartDividerColor.copy(alpha = 0.6f),
                                     start = Offset(0f, topPad + plotHeight),
                                     end = Offset(size.width, topPad + plotHeight),
                                     strokeWidth = 1.dp.toPx(),
@@ -1010,7 +1040,7 @@ private fun NetWorthChartCard(
                             if (selectedIndex in series.indices) {
                                 val selX = selectedIndex * slotPx
                                 drawRoundRect(
-                                    color = LedgerSurfaceHighlight.copy(alpha = 0.55f),
+                                    color = chartHighlightColor.copy(alpha = 0.55f),
                                     topLeft = Offset(selX + 2.dp.toPx(), 0f),
                                     size = Size(slotPx - 4.dp.toPx(), size.height),
                                     cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx())
@@ -1038,7 +1068,7 @@ private fun NetWorthChartCard(
                                 if (assetPx > 0.5f) {
                                     val topY = if (assetVal >= 0f) zeroY - assetPx else zeroY
                                     drawRoundRect(
-                                        color = if (idx == selectedIndex) LedgerBlue else LedgerBlue.copy(alpha = 0.78f),
+                                        color = if (idx == selectedIndex) chartBlueColor else chartBlueColor.copy(alpha = 0.78f),
                                         topLeft = Offset(assetLeft, topY),
                                         size = Size(subBarW, assetPx),
                                         cornerRadius = CornerRadius(cornerPx, cornerPx)
@@ -1048,7 +1078,7 @@ private fun NetWorthChartCard(
                                 if (liabPx > 0.5f) {
                                     val topY = if (liabVal >= 0f) zeroY else zeroY - liabPx
                                     drawRoundRect(
-                                        color = if (idx == selectedIndex) LedgerCoral else LedgerCoral.copy(alpha = 0.80f),
+                                        color = if (idx == selectedIndex) chartCoralColor else chartCoralColor.copy(alpha = 0.80f),
                                         topLeft = Offset(liabLeft, topY),
                                         size = Size(subBarW, liabPx),
                                         cornerRadius = CornerRadius(cornerPx, cornerPx)
@@ -1062,7 +1092,7 @@ private fun NetWorthChartCard(
 
                             // Zero Baseline
                             drawLine(
-                                color = LedgerBorder,
+                                color = chartBorderColor,
                                 start = Offset(0f, zeroY),
                                 end = Offset(size.width, zeroY),
                                 strokeWidth = 1.4.dp.toPx()
@@ -1078,7 +1108,7 @@ private fun NetWorthChartCard(
                                 }
                                 drawPath(
                                     path = path,
-                                    color = LedgerAmber,
+                                    color = chartAmberColor,
                                     style = Stroke(
                                         width = 2.2.dp.toPx(),
                                         cap = StrokeCap.Round,
@@ -1092,8 +1122,8 @@ private fun NetWorthChartCard(
                                 val isSel = idx == selectedIndex
                                 val outerR = if (isSel) 5.5.dp.toPx() else 3.8.dp.toPx()
                                 val innerR = if (isSel) 3.4.dp.toPx() else 2.2.dp.toPx()
-                                drawCircle(color = LedgerSurface, radius = outerR, center = pt)
-                                drawCircle(color = LedgerAmber, radius = innerR, center = pt)
+                                drawCircle(color = chartSurfaceColor, radius = outerR, center = pt)
+                                drawCircle(color = chartAmberColor, radius = innerR, center = pt)
                             }
                         }
 
@@ -1220,7 +1250,7 @@ private fun NetWorthPeriodTableCard(
                 val isSel = idx == selectedIndex
                 val rowBg by animateColorAsState(
                     targetValue = if (isSel) LedgerSurfaceHighlight.copy(alpha = 0.7f) else Color.Transparent,
-                    animationSpec = tween(160),
+                    animationSpec = LedgerMotion.microTween(100),
                     label = "report_row_bg_${pt.key}"
                 )
                 Row(

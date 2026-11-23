@@ -86,6 +86,7 @@ import com.example.ui.theme.LedgerBackground
 import com.example.ui.theme.LedgerBlue
 import com.example.ui.theme.LedgerBorder
 import com.example.ui.theme.LedgerCoral
+import com.example.ui.theme.LedgerMotion
 import com.example.ui.theme.LedgerDivider
 import com.example.ui.theme.LedgerGreen
 import com.example.ui.theme.LedgerSurface
@@ -159,6 +160,7 @@ data class MonthlyBudgetSummary(
         get() = totalBudgeted > 0.0 && !isOverBudget && overallRatio >= 0.80f
 }
 
+@Composable
 fun budgetStatusColor(ratio: Float, isOverBudget: Boolean): Color = when {
     isOverBudget -> LedgerCoral
     ratio >= 0.80f -> LedgerAmber
@@ -699,12 +701,12 @@ private fun OverallBudgetHeroCard(
     val targetColor = budgetStatusColor(summary.overallRatio, summary.isOverBudget)
     val statusColor by animateColorAsState(
         targetValue = targetColor,
-        animationSpec = tween(220),
+        animationSpec = LedgerMotion.microTween(120),
         label = "overall_budget_color"
     )
     val animatedProgress by animateFloatAsState(
         targetValue = summary.overallRatio.coerceIn(0f, 1f),
-        animationSpec = tween(360, easing = FastOutSlowInEasing),
+        animationSpec = LedgerMotion.smoothSpring(),
         label = "overall_budget_progress"
     )
     val statusText = when {
@@ -858,12 +860,12 @@ private fun CategoryBudgetProgressCard(
     val categoryDotColor = LedgerFormatters.parseColorHex(item.category.colorHex)
     val barColor by animateColorAsState(
         targetValue = budgetStatusColor(item.ratio, item.isOverBudget),
-        animationSpec = tween(220),
+        animationSpec = LedgerMotion.microTween(120),
         label = "cat_budget_color_${item.category.id}"
     )
     val animatedProgress by animateFloatAsState(
         targetValue = item.ratio.coerceIn(0f, 1f),
-        animationSpec = tween(340, easing = FastOutSlowInEasing),
+        animationSpec = LedgerMotion.smoothSpring(),
         label = "cat_budget_progress_${item.category.id}"
     )
 
@@ -1018,8 +1020,8 @@ private fun CategoryBudgetProgressCard(
             // Expandable Category Entries List
             AnimatedVisibility(
                 visible = isExpanded && item.transactions.isNotEmpty(),
-                enter = expandVertically(tween(180)) + fadeIn(tween(150)),
-                exit = shrinkVertically(tween(150)) + fadeOut(tween(120))
+                enter = LedgerMotion.expandEnter(),
+                exit = LedgerMotion.shrinkExit()
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     item.transactions.forEach { tx ->

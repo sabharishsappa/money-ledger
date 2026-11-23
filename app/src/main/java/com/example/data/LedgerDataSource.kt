@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.Flow
 
 interface LedgerDataSource {
     fun observeSettings(userId: String): Flow<UserSettings>
+    fun observeMainGroups(userId: String): Flow<List<MainAccountGroup>>
     fun observeAccountGroups(userId: String): Flow<List<AccountGroup>>
     fun observeAccounts(userId: String): Flow<List<Account>>
     fun observeCategories(userId: String): Flow<List<Category>>
@@ -23,12 +24,24 @@ interface LedgerDataSource {
         weeklyStartDay: String
     ): Result<Unit>
 
+    suspend fun saveMainGroup(
+        userId: String,
+        existingId: String?,
+        name: String,
+        nature: AccountNature,
+        sortOrder: Long
+    ): Result<Unit>
+
+    suspend fun setMainGroupArchived(userId: String, mainGroupId: String, archived: Boolean): Result<Unit>
+    suspend fun deleteMainGroup(userId: String, mainGroupId: String): Result<Unit>
+
     suspend fun saveAccountGroup(
         userId: String,
         existingId: String?,
         name: String,
         groupType: AccountNature,
-        sortOrder: Long
+        sortOrder: Long,
+        mainGroupId: String = ""
     ): Result<Unit>
 
     suspend fun setAccountGroupArchived(userId: String, groupId: String, archived: Boolean): Result<Unit>
