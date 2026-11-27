@@ -35,7 +35,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -103,7 +102,6 @@ fun StatsScreen(
     filter: FilterState,
     viewModel: LedgerViewModel,
     onEditTransaction: (LedgerTransaction) -> Unit,
-    onOpenSpendingTrends: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val symbol = bundle.settings.mainCurrencySymbol
@@ -162,38 +160,6 @@ fun StatsScreen(
             }
 
             Spacer(modifier = Modifier.weight(1f))
-
-            Surface(
-                shape = RoundedCornerShape(6.dp),
-                color = LedgerCoral.copy(alpha = 0.16f),
-                border = BorderStroke(1.dp, LedgerCoral.copy(alpha = 0.55f)),
-                modifier = Modifier
-                    .padding(end = 6.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .clickable(onClick = onOpenSpendingTrends)
-                    .testTag("stats_spending_trends_button")
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.BarChart,
-                        contentDescription = "6-Month Spending Trends",
-                        tint = LedgerCoral,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "6M Trends",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = LedgerCoral,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        softWrap = false
-                    )
-                }
-            }
 
             Box {
                 Surface(

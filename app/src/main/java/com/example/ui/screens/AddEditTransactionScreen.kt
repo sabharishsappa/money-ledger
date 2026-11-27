@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -90,7 +91,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -223,14 +226,16 @@ fun AddEditTransactionScreen(
     var toAccountFieldFocused by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var categoryFieldFocused by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var noteFieldFocused by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var note2FieldFocused by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var taggingFieldFocused by remember(existing, draft, draftKey) { mutableStateOf(false) }
-    var secondaryTaggingFieldFocused by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var toTaggingFieldFocused by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var showAccountSuggestions by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var showToAccountSuggestions by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var showCategorySuggestions by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var showNoteSuggestions by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var showNote2Suggestions by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var showTaggingSuggestions by remember(existing, draft, draftKey) { mutableStateOf(false) }
-    var showSecondaryTaggingSuggestions by remember(existing, draft, draftKey) { mutableStateOf(false) }
+    var showToTaggingSuggestions by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var hasTypedAccountQuery by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var hasTypedToAccountQuery by remember(existing, draft, draftKey) { mutableStateOf(false) }
     var hasTypedCategoryQuery by remember(existing, draft, draftKey) { mutableStateOf(false) }
@@ -251,8 +256,9 @@ fun AddEditTransactionScreen(
         mutableStateOf(initialFee)
     }
     var noteText by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.note.orEmpty()) }
+    var note2Text by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.note2.orEmpty()) }
     var taggingText by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.effectiveTagging().orEmpty()) }
-    var secondaryTaggingText by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.effectiveSecondaryTagging().orEmpty()) }
+    var toTaggingText by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.effectiveToTagging().orEmpty()) }
     var descriptionText by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.description.orEmpty()) }
     var favorite by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.favorite ?: false) }
     var repeatFreq by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.repeat() ?: RepeatFrequency.NONE) }
@@ -268,22 +274,25 @@ fun AddEditTransactionScreen(
     if (activePicker != ActivePicker.NONE) {
         lastVisiblePicker = activePicker
     }
+    fun dismissAllSuggestions() {
+        showAccountSuggestions = false
+        showToAccountSuggestions = false
+        showCategorySuggestions = false
+        showNoteSuggestions = false
+        showNote2Suggestions = false
+        showTaggingSuggestions = false
+        showToTaggingSuggestions = false
+    }
     val anySuggestionsOpen = showAccountSuggestions ||
         showToAccountSuggestions ||
         showCategorySuggestions ||
         showNoteSuggestions ||
+        showNote2Suggestions ||
         showTaggingSuggestions ||
-        showSecondaryTaggingSuggestions
+        showToTaggingSuggestions
     BackHandler {
         when {
-            anySuggestionsOpen -> {
-                showAccountSuggestions = false
-                showToAccountSuggestions = false
-                showCategorySuggestions = false
-                showNoteSuggestions = false
-                showTaggingSuggestions = false
-                showSecondaryTaggingSuggestions = false
-            }
+            anySuggestionsOpen -> dismissAllSuggestions()
             activePicker != ActivePicker.NONE -> {
                 activePicker = ActivePicker.NONE
             }
@@ -434,14 +443,15 @@ fun AddEditTransactionScreen(
         val latestLabel = mutableMapOf<String, String>()
         val latestOrder = mutableMapOf<String, Long>()
         bundle.transactions.forEach { tx ->
-            val clean = tx.effectiveTagging()?.trim().orEmpty()
-            if (clean.isNotEmpty()) {
-                val key = clean.lowercase()
-                counts[key] = (counts[key] ?: 0) + 1
-                val recency = tx.epochDay * 1_000_000L + (tx.timestampMillis % 1_000_000L)
-                if (recency >= (latestOrder[key] ?: Long.MIN_VALUE)) {
-                    latestOrder[key] = recency
-                    latestLabel[key] = clean
+            tx.allEffectivePrimaryTaggings().forEach { clean ->
+                if (clean.isNotEmpty()) {
+                    val key = clean.lowercase()
+                    counts[key] = (counts[key] ?: 0) + 1
+                    val recency = tx.epochDay * 1_000_000L + (tx.timestampMillis % 1_000_000L)
+                    if (recency >= (latestOrder[key] ?: Long.MIN_VALUE)) {
+                        latestOrder[key] = recency
+                        latestLabel[key] = clean
+                    }
                 }
             }
         }
@@ -458,12 +468,12 @@ fun AddEditTransactionScreen(
             }
     }
 
-    val allSecondaryTaggingSuggestions = remember(bundle.transactions) {
+    val allNote2Suggestions = remember(bundle.transactions) {
         val counts = mutableMapOf<String, Int>()
         val latestLabel = mutableMapOf<String, String>()
         val latestOrder = mutableMapOf<String, Long>()
         bundle.transactions.forEach { tx ->
-            val clean = tx.effectiveSecondaryTagging()?.trim().orEmpty()
+            val clean = tx.note2.trim()
             if (clean.isNotEmpty()) {
                 val key = clean.lowercase()
                 counts[key] = (counts[key] ?: 0) + 1
@@ -511,12 +521,7 @@ fun AddEditTransactionScreen(
 
     fun openPicker(picker: ActivePicker) {
         focusManager.clearFocus()
-        showAccountSuggestions = false
-        showToAccountSuggestions = false
-        showCategorySuggestions = false
-        showNoteSuggestions = false
-        showTaggingSuggestions = false
-        showSecondaryTaggingSuggestions = false
+        dismissAllSuggestions()
         activePicker = if (activePicker == picker) ActivePicker.NONE else picker
     }
 
@@ -569,8 +574,13 @@ fun AddEditTransactionScreen(
                 return null
             }
             if (resolvedToAccountId == resolvedAccountId) {
-                validationError = "Source and destination accounts must be different"
-                return null
+                val cleanFromTag = taggingText.trim()
+                val cleanToTag = toTaggingText.trim()
+                val tagsDiffer = !cleanFromTag.equals(cleanToTag, ignoreCase = true)
+                if (!tagsDiffer) {
+                    validationError = "Select a different destination account or assign different From/To tags"
+                    return null
+                }
             }
         } else {
             if (resolvedCategoryId.isBlank() && categoryQuery.isNotBlank()) {
@@ -619,8 +629,9 @@ fun AddEditTransactionScreen(
                 resolvedSubcategory.takeIf { it.isNotBlank() }
             } else null,
             note = noteText.trim(),
+            note2 = note2Text.trim(),
             tagging = taggingText.trim().takeIf { it.isNotBlank() },
-            secondaryTagging = secondaryTaggingText.trim().takeIf { it.isNotBlank() },
+            toTagging = toTaggingText.trim().takeIf { it.isNotBlank() },
             description = descriptionText.trim().takeIf { it.isNotBlank() },
             tags = emptyList(),
             favorite = favorite,
@@ -635,8 +646,9 @@ fun AddEditTransactionScreen(
             amountText = ""
             feeText = ""
             noteText = ""
+            note2Text = ""
             taggingText = ""
-            secondaryTaggingText = ""
+            toTaggingText = ""
             descriptionText = ""
         }
     }
@@ -836,9 +848,7 @@ fun AddEditTransactionScreen(
                             .height(42.dp)
                             .clickable {
                                 txType = option
-                                showAccountSuggestions = false
-                                showToAccountSuggestions = false
-                                showCategorySuggestions = false
+                                dismissAllSuggestions()
                                 if (option != TransactionType.TRANSFER) {
                                     val validCat = bundle.categories.any {
                                         it.id == categoryId && it.categoryType() == if (option == TransactionType.INCOME) CategoryType.INCOME else CategoryType.EXPENSE
@@ -908,7 +918,28 @@ fun AddEditTransactionScreen(
                 )
             }
 
-            // Account / From & Category / To Rows (Type-to-suggest floating overlay + Select Picker)
+            // Tag suggestion lists for the inline 2-alphabet Tag boxes beside Account/From and Category/To
+            val matchingTags = remember(allTaggingSuggestions, taggingText, showTaggingSuggestions, taggingFieldFocused) {
+                if (showTaggingSuggestions && taggingFieldFocused && taggingText.trim().isNotEmpty()) {
+                    filterTextSuggestions(allTaggingSuggestions, taggingText)
+                } else {
+                    emptyList()
+                }
+            }
+            val matchingToTags = remember(
+                allTaggingSuggestions,
+                toTaggingText,
+                showToTaggingSuggestions,
+                toTaggingFieldFocused
+            ) {
+                if (showToTaggingSuggestions && toTaggingFieldFocused && toTaggingText.trim().isNotEmpty()) {
+                    filterTextSuggestions(allTaggingSuggestions, toTaggingText)
+                } else {
+                    emptyList()
+                }
+            }
+
+            // Account / From & Category / To Rows (with compact inline 2-alphabet Tag boxes beside each field)
             if (txType == TransactionType.TRANSFER) {
                 FieldWithFloatingSuggestions(
                     showSuggestions = showAccountSuggestions && accountQuery.trim().isNotEmpty(),
@@ -937,7 +968,10 @@ fun AddEditTransactionScreen(
                         activeAccent = accentColor,
                         onClick = { openPicker(ActivePicker.ACCOUNT) },
                         trailing = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
                                 if (accountQuery.isNotEmpty() && accountFieldFocused) {
                                     IconButton(
                                         onClick = {
@@ -946,7 +980,7 @@ fun AddEditTransactionScreen(
                                             hasTypedAccountQuery = false
                                             showAccountSuggestions = false
                                         },
-                                        modifier = Modifier.size(30.dp)
+                                        modifier = Modifier.size(28.dp)
                                     ) {
                                         Icon(
                                             imageVector = Icons.Filled.Close,
@@ -958,7 +992,7 @@ fun AddEditTransactionScreen(
                                 }
                                 IconButton(
                                     onClick = { openPicker(ActivePicker.ACCOUNT) },
-                                    modifier = Modifier.size(32.dp).testTag("tx_from_account_picker_button")
+                                    modifier = Modifier.size(30.dp).testTag("tx_from_account_picker_button")
                                 ) {
                                     Icon(
                                         imageVector = Icons.Filled.ArrowDropDown,
@@ -974,13 +1008,57 @@ fun AddEditTransactionScreen(
                                         val tmpQuery = accountQuery
                                         accountQuery = toAccountQuery
                                         toAccountQuery = tmpQuery
+                                        val tmpTag = taggingText
+                                        taggingText = toTaggingText
+                                        toTaggingText = tmpTag
                                     },
-                                    modifier = Modifier.size(32.dp).testTag("tx_swap_accounts_button")
+                                    modifier = Modifier.size(30.dp).testTag("tx_swap_accounts_button")
                                 ) {
                                     Icon(
                                         imageVector = Icons.Filled.SwapVert,
                                         contentDescription = "Swap accounts",
                                         tint = LedgerTextSecondary
+                                    )
+                                }
+                                FieldWithFloatingSuggestions(
+                                    showSuggestions = matchingTags.isNotEmpty(),
+                                    startIndent = 0.dp,
+                                    minDropdownWidth = 136.dp,
+                                    modifier = Modifier.wrapContentSize(),
+                                    suggestionsContent = {
+                                        TextSuggestionList(
+                                            suggestions = matchingTags,
+                                            currentValue = taggingText,
+                                            accentColor = LedgerCoral,
+                                            listTestTag = "tx_tagging_suggestions_list",
+                                            itemTestTagPrefix = "tx_tagging_suggestion_",
+                                            onSelect = { selected ->
+                                                taggingText = selected.text
+                                                showTaggingSuggestions = false
+                                                focusManager.clearFocus()
+                                            }
+                                        )
+                                    }
+                                ) {
+                                    InlineCompactTagBox(
+                                        value = taggingText,
+                                        onValueChange = { typed ->
+                                            taggingText = typed.take(20)
+                                            showTaggingSuggestions = typed.trim().isNotEmpty()
+                                            activePicker = ActivePicker.NONE
+                                        },
+                                        isFocused = taggingFieldFocused,
+                                        onFocusChanged = { focused ->
+                                            taggingFieldFocused = focused
+                                            if (focused) {
+                                                activePicker = ActivePicker.NONE
+                                                dismissAllSuggestions()
+                                            } else {
+                                                showTaggingSuggestions = false
+                                            }
+                                        },
+                                        accentColor = LedgerCoral,
+                                        inputTestTag = "tx_tagging_input"
                                     )
                                 }
                             }
@@ -1003,7 +1081,7 @@ fun AddEditTransactionScreen(
                             cursorBrush = SolidColor(accentColor),
                             decorationBox = { inner ->
                                 if (accountQuery.isEmpty()) {
-                                    Text("Type or select source ledger", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
+                                    Text("Source ledger", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
                                 }
                                 inner()
                             },
@@ -1014,12 +1092,7 @@ fun AddEditTransactionScreen(
                                     if (state.isFocused) {
                                         hasTypedAccountQuery = false
                                         activePicker = ActivePicker.NONE
-                                        showToAccountSuggestions = false
-                                        showCategorySuggestions = false
-                                        showNoteSuggestions = false
-                                        showTaggingSuggestions = false
-                                        showSecondaryTaggingSuggestions = false
-                                        showAccountSuggestions = false
+                                        dismissAllSuggestions()
                                     } else {
                                         showAccountSuggestions = false
                                     }
@@ -1056,7 +1129,10 @@ fun AddEditTransactionScreen(
                         activeAccent = accentColor,
                         onClick = { openPicker(ActivePicker.TO_ACCOUNT) },
                         trailing = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
                                 if (toAccountQuery.isNotEmpty() && toAccountFieldFocused) {
                                     IconButton(
                                         onClick = {
@@ -1065,7 +1141,7 @@ fun AddEditTransactionScreen(
                                             hasTypedToAccountQuery = false
                                             showToAccountSuggestions = false
                                         },
-                                        modifier = Modifier.size(30.dp)
+                                        modifier = Modifier.size(28.dp)
                                     ) {
                                         Icon(
                                             imageVector = Icons.Filled.Close,
@@ -1077,12 +1153,53 @@ fun AddEditTransactionScreen(
                                 }
                                 IconButton(
                                     onClick = { openPicker(ActivePicker.TO_ACCOUNT) },
-                                    modifier = Modifier.size(32.dp).testTag("tx_to_account_picker_button")
+                                    modifier = Modifier.size(30.dp).testTag("tx_to_account_picker_button")
                                 ) {
                                     Icon(
                                         imageVector = Icons.Filled.ArrowDropDown,
                                         contentDescription = "Select destination account",
                                         tint = if (activePicker == ActivePicker.TO_ACCOUNT) accentColor else LedgerTextSecondary
+                                    )
+                                }
+                                FieldWithFloatingSuggestions(
+                                    showSuggestions = matchingToTags.isNotEmpty(),
+                                    startIndent = 0.dp,
+                                    minDropdownWidth = 136.dp,
+                                    modifier = Modifier.wrapContentSize(),
+                                    suggestionsContent = {
+                                        TextSuggestionList(
+                                            suggestions = matchingToTags,
+                                            currentValue = toTaggingText,
+                                            accentColor = LedgerBlue,
+                                            listTestTag = "tx_to_tagging_suggestions_list",
+                                            itemTestTagPrefix = "tx_to_tagging_suggestion_",
+                                            onSelect = { selected ->
+                                                toTaggingText = selected.text
+                                                showToTaggingSuggestions = false
+                                                focusManager.clearFocus()
+                                            }
+                                        )
+                                    }
+                                ) {
+                                    InlineCompactTagBox(
+                                        value = toTaggingText,
+                                        onValueChange = { typed ->
+                                            toTaggingText = typed.take(20)
+                                            showToTaggingSuggestions = typed.trim().isNotEmpty()
+                                            activePicker = ActivePicker.NONE
+                                        },
+                                        isFocused = toTaggingFieldFocused,
+                                        onFocusChanged = { focused ->
+                                            toTaggingFieldFocused = focused
+                                            if (focused) {
+                                                activePicker = ActivePicker.NONE
+                                                dismissAllSuggestions()
+                                            } else {
+                                                showToTaggingSuggestions = false
+                                            }
+                                        },
+                                        accentColor = LedgerBlue,
+                                        inputTestTag = "tx_to_tagging_input"
                                     )
                                 }
                             }
@@ -1105,7 +1222,7 @@ fun AddEditTransactionScreen(
                             cursorBrush = SolidColor(accentColor),
                             decorationBox = { inner ->
                                 if (toAccountQuery.isEmpty()) {
-                                    Text("Type or select destination ledger", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
+                                    Text("Destination ledger", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
                                 }
                                 inner()
                             },
@@ -1116,12 +1233,7 @@ fun AddEditTransactionScreen(
                                     if (state.isFocused) {
                                         hasTypedToAccountQuery = false
                                         activePicker = ActivePicker.NONE
-                                        showAccountSuggestions = false
-                                        showCategorySuggestions = false
-                                        showNoteSuggestions = false
-                                        showTaggingSuggestions = false
-                                        showSecondaryTaggingSuggestions = false
-                                        showToAccountSuggestions = false
+                                        dismissAllSuggestions()
                                     } else {
                                         showToAccountSuggestions = false
                                     }
@@ -1158,7 +1270,10 @@ fun AddEditTransactionScreen(
                         activeAccent = accentColor,
                         onClick = { openPicker(ActivePicker.ACCOUNT) },
                         trailing = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
                                 if (accountQuery.isNotEmpty() && accountFieldFocused) {
                                     IconButton(
                                         onClick = {
@@ -1167,7 +1282,7 @@ fun AddEditTransactionScreen(
                                             hasTypedAccountQuery = false
                                             showAccountSuggestions = false
                                         },
-                                        modifier = Modifier.size(30.dp)
+                                        modifier = Modifier.size(28.dp)
                                     ) {
                                         Icon(
                                             imageVector = Icons.Filled.Close,
@@ -1179,12 +1294,53 @@ fun AddEditTransactionScreen(
                                 }
                                 IconButton(
                                     onClick = { openPicker(ActivePicker.ACCOUNT) },
-                                    modifier = Modifier.size(32.dp).testTag("tx_account_picker_button")
+                                    modifier = Modifier.size(30.dp).testTag("tx_account_picker_button")
                                 ) {
                                     Icon(
                                         imageVector = Icons.Filled.ArrowDropDown,
                                         contentDescription = "Select account",
                                         tint = if (activePicker == ActivePicker.ACCOUNT) accentColor else LedgerTextSecondary
+                                    )
+                                }
+                                FieldWithFloatingSuggestions(
+                                    showSuggestions = matchingTags.isNotEmpty(),
+                                    startIndent = 0.dp,
+                                    minDropdownWidth = 136.dp,
+                                    modifier = Modifier.wrapContentSize(),
+                                    suggestionsContent = {
+                                        TextSuggestionList(
+                                            suggestions = matchingTags,
+                                            currentValue = taggingText,
+                                            accentColor = accentColor,
+                                            listTestTag = "tx_tagging_suggestions_list",
+                                            itemTestTagPrefix = "tx_tagging_suggestion_",
+                                            onSelect = { selected ->
+                                                taggingText = selected.text
+                                                showTaggingSuggestions = false
+                                                focusManager.clearFocus()
+                                            }
+                                        )
+                                    }
+                                ) {
+                                    InlineCompactTagBox(
+                                        value = taggingText,
+                                        onValueChange = { typed ->
+                                            taggingText = typed.take(20)
+                                            showTaggingSuggestions = typed.trim().isNotEmpty()
+                                            activePicker = ActivePicker.NONE
+                                        },
+                                        isFocused = taggingFieldFocused,
+                                        onFocusChanged = { focused ->
+                                            taggingFieldFocused = focused
+                                            if (focused) {
+                                                activePicker = ActivePicker.NONE
+                                                dismissAllSuggestions()
+                                            } else {
+                                                showTaggingSuggestions = false
+                                            }
+                                        },
+                                        accentColor = accentColor,
+                                        inputTestTag = "tx_tagging_input"
                                     )
                                 }
                             }
@@ -1207,7 +1363,7 @@ fun AddEditTransactionScreen(
                             cursorBrush = SolidColor(accentColor),
                             decorationBox = { inner ->
                                 if (accountQuery.isEmpty()) {
-                                    Text("Type or select ledger", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
+                                    Text("Select ledger", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
                                 }
                                 inner()
                             },
@@ -1218,11 +1374,7 @@ fun AddEditTransactionScreen(
                                     if (state.isFocused) {
                                         hasTypedAccountQuery = false
                                         activePicker = ActivePicker.NONE
-                                        showCategorySuggestions = false
-                                        showNoteSuggestions = false
-                                        showTaggingSuggestions = false
-                                        showSecondaryTaggingSuggestions = false
-                                        showAccountSuggestions = false
+                                        dismissAllSuggestions()
                                     } else {
                                         showAccountSuggestions = false
                                     }
@@ -1271,7 +1423,10 @@ fun AddEditTransactionScreen(
                         activeAccent = accentColor,
                         onClick = { openPicker(ActivePicker.CATEGORY) },
                         trailing = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
                                 if (categoryQuery.isNotEmpty() && categoryFieldFocused) {
                                     IconButton(
                                         onClick = {
@@ -1281,7 +1436,7 @@ fun AddEditTransactionScreen(
                                             hasTypedCategoryQuery = false
                                             showCategorySuggestions = false
                                         },
-                                        modifier = Modifier.size(30.dp)
+                                        modifier = Modifier.size(28.dp)
                                     ) {
                                         Icon(
                                             imageVector = Icons.Filled.Close,
@@ -1293,12 +1448,53 @@ fun AddEditTransactionScreen(
                                 }
                                 IconButton(
                                     onClick = { openPicker(ActivePicker.CATEGORY) },
-                                    modifier = Modifier.size(32.dp).testTag("tx_category_picker_button")
+                                    modifier = Modifier.size(30.dp).testTag("tx_category_picker_button")
                                 ) {
                                     Icon(
                                         imageVector = Icons.Filled.ArrowDropDown,
                                         contentDescription = "Select category",
                                         tint = if (activePicker == ActivePicker.CATEGORY) accentColor else LedgerTextSecondary
+                                    )
+                                }
+                                FieldWithFloatingSuggestions(
+                                    showSuggestions = matchingToTags.isNotEmpty(),
+                                    startIndent = 0.dp,
+                                    minDropdownWidth = 136.dp,
+                                    modifier = Modifier.wrapContentSize(),
+                                    suggestionsContent = {
+                                        TextSuggestionList(
+                                            suggestions = matchingToTags,
+                                            currentValue = toTaggingText,
+                                            accentColor = accentColor,
+                                            listTestTag = "tx_to_tagging_suggestions_list",
+                                            itemTestTagPrefix = "tx_to_tagging_suggestion_",
+                                            onSelect = { selected ->
+                                                toTaggingText = selected.text
+                                                showToTaggingSuggestions = false
+                                                focusManager.clearFocus()
+                                            }
+                                        )
+                                    }
+                                ) {
+                                    InlineCompactTagBox(
+                                        value = toTaggingText,
+                                        onValueChange = { typed ->
+                                            toTaggingText = typed.take(20)
+                                            showToTaggingSuggestions = typed.trim().isNotEmpty()
+                                            activePicker = ActivePicker.NONE
+                                        },
+                                        isFocused = toTaggingFieldFocused,
+                                        onFocusChanged = { focused ->
+                                            toTaggingFieldFocused = focused
+                                            if (focused) {
+                                                activePicker = ActivePicker.NONE
+                                                dismissAllSuggestions()
+                                            } else {
+                                                showToTaggingSuggestions = false
+                                            }
+                                        },
+                                        accentColor = accentColor,
+                                        inputTestTag = "tx_to_tagging_input"
                                     )
                                 }
                             }
@@ -1330,9 +1526,9 @@ fun AddEditTransactionScreen(
                                 if (categoryQuery.isEmpty()) {
                                     Text(
                                         text = if (txType == TransactionType.INCOME) {
-                                            "Type or select income ledger"
+                                            "Income ledger"
                                         } else {
-                                            "Type or select expense ledger"
+                                            "Expense ledger"
                                         },
                                         style = MaterialTheme.typography.bodyLarge,
                                         color = LedgerTextMuted
@@ -1347,11 +1543,7 @@ fun AddEditTransactionScreen(
                                     if (state.isFocused) {
                                         hasTypedCategoryQuery = false
                                         activePicker = ActivePicker.NONE
-                                        showAccountSuggestions = false
-                                        showNoteSuggestions = false
-                                        showTaggingSuggestions = false
-                                        showSecondaryTaggingSuggestions = false
-                                        showCategorySuggestions = false
+                                        dismissAllSuggestions()
                                     } else {
                                         showCategorySuggestions = false
                                     }
@@ -1455,7 +1647,7 @@ fun AddEditTransactionScreen(
                 }
             }
 
-            // Note Row (with floating type-ahead matching suggestions from previous entries)
+            // Note 1 Row (with floating type-ahead matching suggestions from previous entries)
             val matchingNotes = remember(allNoteSuggestions, noteText, showNoteSuggestions, noteFieldFocused) {
                 if (showNoteSuggestions && noteFieldFocused && noteText.trim().isNotEmpty()) {
                     filterTextSuggestions(allNoteSuggestions, noteText)
@@ -1482,7 +1674,7 @@ fun AddEditTransactionScreen(
                 }
             ) {
                 FormFieldRow(
-                    label = "Note",
+                    label = "Note 1",
                     labelWidth = labelWidth,
                     isActive = noteFieldFocused,
                     activeAccent = accentColor,
@@ -1498,7 +1690,7 @@ fun AddEditTransactionScreen(
                             ) {
                                 Icon(
                                     imageVector = Icons.Filled.Close,
-                                    contentDescription = "Clear note",
+                                    contentDescription = "Clear note 1",
                                     tint = LedgerTextMuted,
                                     modifier = Modifier.size(16.dp)
                                 )
@@ -1518,7 +1710,7 @@ fun AddEditTransactionScreen(
                         cursorBrush = SolidColor(accentColor),
                         decorationBox = { inner ->
                             if (noteText.isEmpty()) {
-                                Text("Enter title or note", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
+                                Text("Enter title or note 1", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
                             }
                             inner()
                         },
@@ -1528,12 +1720,7 @@ fun AddEditTransactionScreen(
                                 noteFieldFocused = state.isFocused
                                 if (state.isFocused) {
                                     activePicker = ActivePicker.NONE
-                                    showAccountSuggestions = false
-                                    showToAccountSuggestions = false
-                                    showCategorySuggestions = false
-                                    showTaggingSuggestions = false
-                                    showSecondaryTaggingSuggestions = false
-                                    showNoteSuggestions = false
+                                    dismissAllSuggestions()
                                 } else {
                                     showNoteSuggestions = false
                                 }
@@ -1543,50 +1730,50 @@ fun AddEditTransactionScreen(
                 }
             }
 
-            // Tagging 1 Row (Styled identically to Note, with floating type-ahead matching suggestions)
-            val matchingTags = remember(allTaggingSuggestions, taggingText, showTaggingSuggestions, taggingFieldFocused) {
-                if (showTaggingSuggestions && taggingFieldFocused && taggingText.trim().isNotEmpty()) {
-                    filterTextSuggestions(allTaggingSuggestions, taggingText)
+            // Note 2 Row (same floating type-ahead matching behavior as Note 1)
+            val matchingNotes2 = remember(allNote2Suggestions, note2Text, showNote2Suggestions, note2FieldFocused) {
+                if (showNote2Suggestions && note2FieldFocused && note2Text.trim().isNotEmpty()) {
+                    filterTextSuggestions(allNote2Suggestions, note2Text)
                 } else {
                     emptyList()
                 }
             }
             FieldWithFloatingSuggestions(
-                showSuggestions = matchingTags.isNotEmpty(),
+                showSuggestions = matchingNotes2.isNotEmpty(),
                 startIndent = labelWidth,
                 suggestionsContent = {
                     TextSuggestionList(
-                        suggestions = matchingTags,
-                        currentValue = taggingText,
+                        suggestions = matchingNotes2,
+                        currentValue = note2Text,
                         accentColor = accentColor,
-                        listTestTag = "tx_tagging_suggestions_list",
-                        itemTestTagPrefix = "tx_tagging_suggestion_",
+                        listTestTag = "tx_note2_suggestions_list",
+                        itemTestTagPrefix = "tx_note2_suggestion_",
                         onSelect = { selected ->
-                            taggingText = selected.text
-                            showTaggingSuggestions = false
+                            note2Text = selected.text
+                            showNote2Suggestions = false
                             focusManager.clearFocus()
                         }
                     )
                 }
             ) {
                 FormFieldRow(
-                    label = "Tagging",
+                    label = "Note 2",
                     labelWidth = labelWidth,
-                    isActive = taggingFieldFocused,
+                    isActive = note2FieldFocused,
                     activeAccent = accentColor,
                     onClick = { activePicker = ActivePicker.NONE },
-                    trailing = if (taggingText.isNotEmpty()) {
+                    trailing = if (note2Text.isNotEmpty()) {
                         {
                             IconButton(
                                 onClick = {
-                                    taggingText = ""
-                                    showTaggingSuggestions = false
+                                    note2Text = ""
+                                    showNote2Suggestions = false
                                 },
                                 modifier = Modifier.size(28.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.Filled.Close,
-                                    contentDescription = "Clear tagging",
+                                    contentDescription = "Clear note 2",
                                     tint = LedgerTextMuted,
                                     modifier = Modifier.size(16.dp)
                                 )
@@ -1595,131 +1782,33 @@ fun AddEditTransactionScreen(
                     } else null
                 ) {
                     BasicTextField(
-                        value = taggingText,
+                        value = note2Text,
                         onValueChange = { typed ->
-                            taggingText = typed.take(60)
-                            showTaggingSuggestions = typed.trim().isNotEmpty()
+                            note2Text = typed.take(140)
+                            showNote2Suggestions = typed.trim().isNotEmpty()
                             activePicker = ActivePicker.NONE
                         },
                         textStyle = MaterialTheme.typography.bodyLarge.copy(color = LedgerTextPrimary),
                         singleLine = true,
                         cursorBrush = SolidColor(accentColor),
                         decorationBox = { inner ->
-                            if (taggingText.isEmpty()) {
-                                Text("e.g. Home, Personal, Business", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
+                            if (note2Text.isEmpty()) {
+                                Text("Enter note 2 (optional)", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
                             }
                             inner()
                         },
                         modifier = Modifier
                             .fillMaxWidth()
                             .onFocusChanged { state ->
-                                taggingFieldFocused = state.isFocused
+                                note2FieldFocused = state.isFocused
                                 if (state.isFocused) {
                                     activePicker = ActivePicker.NONE
-                                    showAccountSuggestions = false
-                                    showToAccountSuggestions = false
-                                    showCategorySuggestions = false
-                                    showNoteSuggestions = false
-                                    showSecondaryTaggingSuggestions = false
-                                    showTaggingSuggestions = false
+                                    dismissAllSuggestions()
                                 } else {
-                                    showTaggingSuggestions = false
+                                    showNote2Suggestions = false
                                 }
                             }
-                            .testTag("tx_tagging_input")
-                    )
-                }
-            }
-
-            // Tagging 2 Row (Independent second tagging dimension for separate tracking)
-            val matchingSecondaryTags = remember(
-                allSecondaryTaggingSuggestions,
-                secondaryTaggingText,
-                showSecondaryTaggingSuggestions,
-                secondaryTaggingFieldFocused
-            ) {
-                if (showSecondaryTaggingSuggestions && secondaryTaggingFieldFocused && secondaryTaggingText.trim().isNotEmpty()) {
-                    filterTextSuggestions(allSecondaryTaggingSuggestions, secondaryTaggingText)
-                } else {
-                    emptyList()
-                }
-            }
-            FieldWithFloatingSuggestions(
-                showSuggestions = matchingSecondaryTags.isNotEmpty(),
-                startIndent = labelWidth,
-                suggestionsContent = {
-                    TextSuggestionList(
-                        suggestions = matchingSecondaryTags,
-                        currentValue = secondaryTaggingText,
-                        accentColor = accentColor,
-                        listTestTag = "tx_secondary_tagging_suggestions_list",
-                        itemTestTagPrefix = "tx_secondary_tagging_suggestion_",
-                        onSelect = { selected ->
-                            secondaryTaggingText = selected.text
-                            showSecondaryTaggingSuggestions = false
-                            focusManager.clearFocus()
-                        }
-                    )
-                }
-            ) {
-                FormFieldRow(
-                    label = "Tagging 2",
-                    labelWidth = labelWidth,
-                    isActive = secondaryTaggingFieldFocused,
-                    activeAccent = accentColor,
-                    onClick = { activePicker = ActivePicker.NONE },
-                    trailing = if (secondaryTaggingText.isNotEmpty()) {
-                        {
-                            IconButton(
-                                onClick = {
-                                    secondaryTaggingText = ""
-                                    showSecondaryTaggingSuggestions = false
-                                },
-                                modifier = Modifier.size(28.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Close,
-                                    contentDescription = "Clear second tagging",
-                                    tint = LedgerTextMuted,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-                        }
-                    } else null
-                ) {
-                    BasicTextField(
-                        value = secondaryTaggingText,
-                        onValueChange = { typed ->
-                            secondaryTaggingText = typed.take(60)
-                            showSecondaryTaggingSuggestions = typed.trim().isNotEmpty()
-                            activePicker = ActivePicker.NONE
-                        },
-                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = LedgerTextPrimary),
-                        singleLine = true,
-                        cursorBrush = SolidColor(accentColor),
-                        decorationBox = { inner ->
-                            if (secondaryTaggingText.isEmpty()) {
-                                Text("e.g. Project, Trip, Tax (Separate)", style = MaterialTheme.typography.bodyLarge, color = LedgerTextMuted)
-                            }
-                            inner()
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .onFocusChanged { state ->
-                                secondaryTaggingFieldFocused = state.isFocused
-                                if (state.isFocused) {
-                                    activePicker = ActivePicker.NONE
-                                    showAccountSuggestions = false
-                                    showToAccountSuggestions = false
-                                    showCategorySuggestions = false
-                                    showNoteSuggestions = false
-                                    showTaggingSuggestions = false
-                                    showSecondaryTaggingSuggestions = false
-                                } else {
-                                    showSecondaryTaggingSuggestions = false
-                                }
-                            }
-                            .testTag("tx_secondary_tagging_input")
+                            .testTag("tx_note2_input")
                     )
                 }
             }
@@ -2722,9 +2811,94 @@ private class FieldDropdownPositionProvider(
 }
 
 @Composable
+private fun InlineCompactTagBox(
+    value: String,
+    onValueChange: (String) -> Unit,
+    isFocused: Boolean,
+    onFocusChanged: (Boolean) -> Unit,
+    accentColor: Color,
+    inputTestTag: String
+) {
+    val hasValue = value.isNotBlank()
+    val borderColor by animateColorAsState(
+        targetValue = when {
+            isFocused -> accentColor
+            hasValue -> accentColor.copy(alpha = 0.65f)
+            else -> LedgerBorder
+        },
+        animationSpec = LedgerMotion.microTween(100),
+        label = "inline_tag_border_$inputTestTag"
+    )
+    val bgColor by animateColorAsState(
+        targetValue = when {
+            isFocused -> accentColor.copy(alpha = 0.14f)
+            hasValue -> accentColor.copy(alpha = 0.10f)
+            else -> LedgerSurfaceElevated
+        },
+        animationSpec = LedgerMotion.microTween(100),
+        label = "inline_tag_bg_$inputTestTag"
+    )
+    Surface(
+        shape = RoundedCornerShape(7.dp),
+        color = bgColor,
+        border = BorderStroke(if (isFocused) 1.5.dp else 1.dp, borderColor),
+        modifier = Modifier
+            .width(46.dp)
+            .height(32.dp)
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 4.dp)
+        ) {
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                textStyle = MaterialTheme.typography.labelLarge.copy(
+                    color = if (hasValue || isFocused) accentColor else LedgerTextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center
+                ),
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Characters
+                ),
+                singleLine = true,
+                cursorBrush = SolidColor(accentColor),
+                decorationBox = { inner ->
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (value.isEmpty()) {
+                            Text(
+                                text = "Tag",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = LedgerTextMuted,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+                        inner()
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { onFocusChanged(it.isFocused) }
+                    .testTag(inputTestTag)
+            )
+        }
+    }
+}
+
+@Composable
 private fun FieldWithFloatingSuggestions(
     showSuggestions: Boolean,
     startIndent: Dp,
+    minDropdownWidth: Dp = 180.dp,
+    modifier: Modifier = Modifier.fillMaxWidth(),
     suggestionsContent: @Composable () -> Unit,
     fieldContent: @Composable () -> Unit
 ) {
@@ -2740,15 +2914,14 @@ private fun FieldWithFloatingSuggestions(
     }
 
     Box(
-        modifier = Modifier
-            .fillMaxWidth()
+        modifier = modifier
             .onSizeChanged { anchorSize = it }
     ) {
         fieldContent()
 
         if (showSuggestions && anchorSize.width > 0) {
             val dropdownWidth = with(density) {
-                (anchorSize.width.toDp() - startIndent).coerceAtLeast(180.dp)
+                (anchorSize.width.toDp() - startIndent).coerceAtLeast(minDropdownWidth)
             }
             Popup(
                 popupPositionProvider = positionProvider,

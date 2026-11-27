@@ -154,7 +154,6 @@ private sealed interface ActiveOverlay {
     ) : ActiveOverlay
     data class AccountDetail(val accountId: String) : ActiveOverlay
     data class Configuration(val route: ConfigRoute) : ActiveOverlay
-    data object SpendingTrends : ActiveOverlay
 }
 
 private const val LOCAL_TESTING_USER_ID = "local_device_user"
@@ -563,21 +562,6 @@ private fun LocalLedgerShell(
                     )
                 }
 
-                ActiveOverlay.SpendingTrends -> {
-                    SpendingTrendsScreen(
-                        bundle = bundle,
-                        viewModel = viewModel,
-                        onBack = { overlay = ActiveOverlay.None },
-                        onEditTransaction = { tx -> overlay = ActiveOverlay.AddEditTx(tx) },
-                        onAddExpense = {
-                            overlay = ActiveOverlay.AddEditTx(
-                                existing = null,
-                                prefillType = TransactionType.EXPENSE
-                            )
-                        }
-                    )
-                }
-
                 ActiveOverlay.None -> {
                     BoxWithConstraints(modifier = Modifier.fillMaxSize().background(LedgerBackground)) {
                         val useRail = maxWidth >= 680.dp
@@ -629,16 +613,9 @@ private fun LocalLedgerShell(
                                         viewModel = viewModel,
                                         appLockEnabled = appLockEnabled,
                                         onAddTransaction = { overlay = ActiveOverlay.AddEditTx(null) },
-                                        onAddExpense = {
-                                            overlay = ActiveOverlay.AddEditTx(
-                                                existing = null,
-                                                prefillType = TransactionType.EXPENSE
-                                            )
-                                        },
                                         onEditTransaction = { tx -> overlay = ActiveOverlay.AddEditTx(tx) },
                                         onSelectAccount = { acc -> overlay = ActiveOverlay.AccountDetail(acc.id) },
                                         onOpenConfig = { route -> overlay = ActiveOverlay.Configuration(route) },
-                                        onOpenSpendingTrends = { overlay = ActiveOverlay.SpendingTrends },
                                         onExportCsv = { exportDialogBundle = bundle },
                                         onImportExcel = { importDialogBundle = bundle },
                                         onMassUploadLedgers = { ledgerUploadDialogBundle = bundle },
@@ -666,16 +643,9 @@ private fun LocalLedgerShell(
                                     viewModel = viewModel,
                                     appLockEnabled = appLockEnabled,
                                     onAddTransaction = { overlay = ActiveOverlay.AddEditTx(null) },
-                                    onAddExpense = {
-                                        overlay = ActiveOverlay.AddEditTx(
-                                            existing = null,
-                                            prefillType = TransactionType.EXPENSE
-                                        )
-                                    },
                                     onEditTransaction = { tx -> overlay = ActiveOverlay.AddEditTx(tx) },
                                     onSelectAccount = { acc -> overlay = ActiveOverlay.AccountDetail(acc.id) },
                                     onOpenConfig = { route -> overlay = ActiveOverlay.Configuration(route) },
-                                    onOpenSpendingTrends = { overlay = ActiveOverlay.SpendingTrends },
                                     onExportCsv = { exportDialogBundle = bundle },
                                     onImportExcel = { importDialogBundle = bundle },
                                     onMassUploadLedgers = { ledgerUploadDialogBundle = bundle },
@@ -1444,11 +1414,9 @@ private fun MainTabContent(
     viewModel: LedgerViewModel,
     appLockEnabled: Boolean,
     onAddTransaction: () -> Unit,
-    onAddExpense: () -> Unit,
     onEditTransaction: (LedgerTransaction) -> Unit,
     onSelectAccount: (com.example.data.Account) -> Unit,
     onOpenConfig: (ConfigRoute) -> Unit,
-    onOpenSpendingTrends: () -> Unit,
     onExportCsv: () -> Unit,
     onImportExcel: () -> Unit,
     onMassUploadLedgers: () -> Unit,
@@ -1492,7 +1460,6 @@ private fun MainTabContent(
                 viewModel = viewModel,
                 onSelectAccount = onSelectAccount,
                 onEditTransaction = onEditTransaction,
-                onAddExpense = onAddExpense,
                 modifier = Modifier.fillMaxSize()
             )
 

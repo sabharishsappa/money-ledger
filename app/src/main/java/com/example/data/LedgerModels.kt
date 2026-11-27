@@ -329,8 +329,9 @@ data class LedgerTransaction(
     val categoryId: String? = null,
     val subcategory: String? = null,
     val note: String = "",
+    val note2: String = "",
     val tagging: String? = null,
-    val secondaryTagging: String? = null,
+    val toTagging: String? = null,
     val description: String? = null,
     val tags: List<String> = emptyList(),
     val favorite: Boolean = false,
@@ -347,8 +348,11 @@ data class LedgerTransaction(
         tagging?.trim()?.takeIf { it.isNotEmpty() }
             ?: tags.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
 
-    fun effectiveSecondaryTagging(): String? =
-        secondaryTagging?.trim()?.takeIf { it.isNotEmpty() }
+    fun effectiveToTagging(): String? =
+        toTagging?.trim()?.takeIf { it.isNotEmpty() }
+
+    fun allEffectivePrimaryTaggings(): List<String> =
+        listOfNotNull(effectiveTagging(), effectiveToTagging()).distinct()
 
     fun toCreateMap(uid: String): Map<String, Any> {
         val raw = mutableMapOf<String, Any?>(
@@ -363,8 +367,9 @@ data class LedgerTransaction(
             "categoryId" to categoryId?.takeIf { it.isNotBlank() },
             "subcategory" to subcategory?.trim()?.take(60)?.takeIf { it.isNotEmpty() },
             "note" to note.trim().take(140),
+            "note2" to note2.trim().take(140),
             "tagging" to tagging?.trim()?.take(60)?.takeIf { it.isNotEmpty() },
-            "secondaryTagging" to secondaryTagging?.trim()?.take(60)?.takeIf { it.isNotEmpty() },
+            "toTagging" to toTagging?.trim()?.take(60)?.takeIf { it.isNotEmpty() },
             "description" to description?.trim()?.take(500)?.takeIf { it.isNotEmpty() },
             "tags" to tags.map { it.trim().take(40) }.filter { it.isNotEmpty() }.take(10),
             "favorite" to favorite,

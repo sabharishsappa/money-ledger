@@ -367,7 +367,7 @@ fun MoreScreen(
                 Text(
                     "• Trans.: Browse Daily, Calendar, Monthly, Total, and Notes views. Tap + to add Income, Expense, or Transfer entries.\n\n" +
                         "• Accounts: Track Assets, Liabilities, and Net Total across custom account groups. Tap any account for its full statement.\n\n" +
-                        "• Reports: Open Stats, Net Worth, 6-Month Spending Trends, and Monthly Budget reports from one unified list.",
+                        "• Reports: Open Stats, Net Worth, Monthly Budget, and Tagging Transactions reports from one unified list.",
                     color = LedgerTextSecondary
                 )
             },
@@ -1930,24 +1930,14 @@ private fun TagSettingScreen(
     onBack: () -> Unit
 ) {
     val symbol = bundle.settings.mainCurrencySymbol
-    var selectedSecondary by remember { mutableStateOf(false) }
 
-    val primaryStats = remember(bundle.transactions) {
+    val tagStats = remember(bundle.transactions) {
         bundle.transactions
-            .mapNotNull { tx -> tx.effectiveTagging()?.let { it to tx } }
+            .flatMap { tx -> tx.allEffectivePrimaryTaggings().map { it to tx } }
             .groupBy({ it.first }, { it.second })
             .entries
             .sortedByDescending { it.value.size }
     }
-    val secondaryStats = remember(bundle.transactions) {
-        bundle.transactions
-            .mapNotNull { tx -> tx.effectiveSecondaryTagging()?.let { it to tx } }
-            .groupBy({ it.first }, { it.second })
-            .entries
-            .sortedByDescending { it.value.size }
-    }
-    val activeStats = if (selectedSecondary) secondaryStats else primaryStats
-    val activeAccent = if (selectedSecondary) LedgerAmber else LedgerCoral
 
     Column(
         modifier = Modifier
@@ -1958,58 +1948,17 @@ private fun TagSettingScreen(
     ) {
         ConfigTopBar(title = "Tagging Settings", onBack = onBack)
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(LedgerSurface)
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            listOf(
-                Triple(false, "Tagging 1 (${primaryStats.size})", LedgerCoral),
-                Triple(true, "Tagging 2 (${secondaryStats.size})", LedgerAmber)
-            ).forEach { (isSec, label, color) ->
-                val selected = selectedSecondary == isSec
-                Surface(
-                    onClick = { selectedSecondary = isSec },
-                    shape = RoundedCornerShape(10.dp),
-                    color = if (selected) color.copy(alpha = 0.18f) else LedgerSurfaceElevated,
-                    border = BorderStroke(1.dp, if (selected) color else LedgerBorder),
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 44.dp)
-                        .testTag(if (isSec) "tag_setting_tab_2" else "tag_setting_tab_1")
-                ) {
-                    Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                            color = if (selected) color else LedgerTextPrimary,
-                            maxLines = 1,
-                            softWrap = false
-                        )
-                    }
-                }
-            }
-        }
-        HorizontalDivider(color = LedgerDivider)
-
-        if (activeStats.isEmpty()) {
+        if (tagStats.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
                 Text(
-                    text = if (selectedSecondary) {
-                        "Tagging 2 values you add to transactions will appear here for separate tracking."
-                    } else {
-                        "Tagging 1 values you add to transactions will appear here."
-                    },
+                    text = "Tagging values you add to transactions will appear here.",
                     color = LedgerTextMuted,
                     textAlign = TextAlign.Center
                 )
             }
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(activeStats, key = { "${selectedSecondary}_${it.key}" }) { (tag, txs) ->
+                items(tagStats, key = { it.key }) { (tag, txs) ->
                     val inc = txs.filter { it.txType() == com.example.data.TransactionType.INCOME }.sumOf { it.amount }
                     val exp = txs.filter { it.txType() == com.example.data.TransactionType.EXPENSE }.sumOf { it.amount }
                     val net = inc - exp
@@ -2035,7 +1984,7 @@ private fun TagSettingScreen(
                                     .width(3.dp)
                                     .height(26.dp)
                                     .clip(RoundedCornerShape(2.dp))
-                                    .background(activeAccent)
+                                    .background(LedgerCoral)
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {

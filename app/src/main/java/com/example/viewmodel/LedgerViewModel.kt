@@ -56,9 +56,7 @@ data class AccountWithBalance(
     val account: Account,
     val balance: Double,
     val tagBalances: Map<String, Double> = emptyMap(),
-    val untaggedBalance: Double = 0.0,
-    val secondaryTagBalances: Map<String, Double> = emptyMap(),
-    val secondaryUntaggedBalance: Double = 0.0
+    val untaggedBalance: Double = 0.0
 )
 
 @Immutable
@@ -67,9 +65,7 @@ data class AccountGroupSection(
     val accounts: List<AccountWithBalance>,
     val subtotal: Double,
     val tagSubtotals: Map<String, Double> = emptyMap(),
-    val untaggedSubtotal: Double = 0.0,
-    val secondaryTagSubtotals: Map<String, Double> = emptyMap(),
-    val secondaryUntaggedSubtotal: Double = 0.0
+    val untaggedSubtotal: Double = 0.0
 )
 
 @Immutable
@@ -77,6 +73,36 @@ data class MainGroupHierarchy(
     val mainGroup: MainAccountGroup,
     val subGroups: List<AccountGroupSection>,
     val totalLedgerCount: Int
+)
+
+@Immutable
+data class CategoryTagSplitLedgerRow(
+    val key: String,
+    val name: String,
+    val total: Double,
+    val tagValues: Map<String, Double> = emptyMap(),
+    val untaggedValue: Double = 0.0
+)
+
+@Immutable
+data class CategoryTagSplitRow(
+    val categoryId: String,
+    val name: String,
+    val total: Double,
+    val tagValues: Map<String, Double> = emptyMap(),
+    val untaggedValue: Double = 0.0,
+    val ledgers: List<CategoryTagSplitLedgerRow> = emptyList()
+)
+
+@Immutable
+data class CategoryTypeTagSplitSection(
+    val id: String,
+    val title: String,
+    val isIncome: Boolean,
+    val rows: List<CategoryTagSplitRow>,
+    val subtotal: Double,
+    val tagSubtotals: Map<String, Double> = emptyMap(),
+    val untaggedSubtotal: Double = 0.0
 )
 
 @Immutable
@@ -240,13 +266,7 @@ data class LedgerDataBundle(
     }
 
     val allTaggings: List<String> by lazy {
-        transactions.mapNotNull { it.effectiveTagging() }
-            .distinct()
-            .sorted()
-    }
-
-    val allSecondaryTaggings: List<String> by lazy {
-        transactions.mapNotNull { it.effectiveSecondaryTagging() }
+        transactions.flatMap { it.allEffectivePrimaryTaggings() }
             .distinct()
             .sorted()
     }
@@ -273,7 +293,8 @@ data class LedgerDataBundle(
     }
 
     private fun computeAccountTagSplits(
-        tagSelector: (LedgerTransaction) -> String?
+        fromTagSelector: (LedgerTransaction) -> String?,
+        toTagSelector: (LedgerTransaction) -> String?
     ): Pair<Map<String, Map<String, Double>>, Map<String, Double>> {
         val tagged = mutableMapOf<String, MutableMap<String, Double>>()
         val untagged = accounts.associate { it.id to it.initialBalance }.toMutableMap()
@@ -288,14 +309,15 @@ data class LedgerDataBundle(
         }
 
         transactions.forEach { tx ->
-            val tagKey = tagSelector(tx)
+            val fromTagKey = fromTagSelector(tx)
             when (tx.txType()) {
-                TransactionType.INCOME -> addDelta(tx.accountId, tagKey, tx.amount)
-                TransactionType.EXPENSE -> addDelta(tx.accountId, tagKey, -tx.amount)
+                TransactionType.INCOME -> addDelta(tx.accountId, fromTagKey, tx.amount)
+                TransactionType.EXPENSE -> addDelta(tx.accountId, fromTagKey, -tx.amount)
                 TransactionType.TRANSFER -> {
-                    addDelta(tx.accountId, tagKey, -(tx.amount + tx.feeAmount))
+                    val toTagKey = toTagSelector(tx)
+                    addDelta(tx.accountId, fromTagKey, -(tx.amount + tx.feeAmount))
                     tx.toAccountId?.let { dest ->
-                        addDelta(dest, tagKey, tx.amount)
+                        addDelta(dest, toTagKey, tx.amount)
                     }
                 }
             }
@@ -305,11 +327,10 @@ data class LedgerDataBundle(
     }
 
     private val perAccountTagSplits: Pair<Map<String, Map<String, Double>>, Map<String, Double>> by lazy {
-        computeAccountTagSplits { it.effectiveTagging() }
-    }
-
-    private val perAccountSecondaryTagSplits: Pair<Map<String, Map<String, Double>>, Map<String, Double>> by lazy {
-        computeAccountTagSplits { it.effectiveSecondaryTagging() }
+        computeAccountTagSplits(
+            fromTagSelector = { it.effectiveTagging() },
+            toTagSelector = { it.effectiveToTagging() }
+        )
     }
 
     val accountTagBalances: Map<String, Map<String, Double>>
@@ -318,57 +339,35 @@ data class LedgerDataBundle(
     val accountUntaggedBalances: Map<String, Double>
         get() = perAccountTagSplits.second
 
-    val accountSecondaryTagBalances: Map<String, Map<String, Double>>
-        get() = perAccountSecondaryTagSplits.first
-
-    val accountSecondaryUntaggedBalances: Map<String, Double>
-        get() = perAccountSecondaryTagSplits.second
-
     val hasAnyUntaggedBalance: Boolean by lazy {
         activeAccounts.any { acc ->
             abs(accountUntaggedBalances[acc.id] ?: 0.0) > 0.004
         }
     }
 
-    val hasAnySecondaryUntaggedBalance: Boolean by lazy {
-        activeAccounts.any { acc ->
-            abs(accountSecondaryUntaggedBalances[acc.id] ?: 0.0) > 0.004
-        }
-    }
-
     val accountSections: List<AccountGroupSection> by lazy {
         val activeByGroup = activeAccounts.groupBy { it.groupId }
         val tags = allTaggings
-        val secTags = allSecondaryTaggings
         activeGroups.map { group ->
             val items = (activeByGroup[group.id] ?: emptyList()).map { acc ->
                 val tMap = accountTagBalances[acc.id].orEmpty()
                 val uBal = accountUntaggedBalances[acc.id] ?: acc.initialBalance
-                val secMap = accountSecondaryTagBalances[acc.id].orEmpty()
-                val secUBal = accountSecondaryUntaggedBalances[acc.id] ?: acc.initialBalance
                 AccountWithBalance(
                     account = acc,
                     balance = accountBalances[acc.id] ?: acc.initialBalance,
                     tagBalances = tMap,
-                    untaggedBalance = uBal,
-                    secondaryTagBalances = secMap,
-                    secondaryUntaggedBalance = secUBal
+                    untaggedBalance = uBal
                 )
             }
             val groupTagSubs = tags.associateWith { tag ->
                 items.sumOf { it.tagBalances[tag] ?: 0.0 }
-            }
-            val groupSecTagSubs = secTags.associateWith { tag ->
-                items.sumOf { it.secondaryTagBalances[tag] ?: 0.0 }
             }
             AccountGroupSection(
                 group = group,
                 accounts = items,
                 subtotal = items.sumOf { it.balance },
                 tagSubtotals = groupTagSubs,
-                untaggedSubtotal = items.sumOf { it.untaggedBalance },
-                secondaryTagSubtotals = groupSecTagSubs,
-                secondaryUntaggedSubtotal = items.sumOf { it.secondaryUntaggedBalance }
+                untaggedSubtotal = items.sumOf { it.untaggedBalance }
             )
         }
     }
@@ -383,14 +382,120 @@ data class LedgerDataBundle(
         activeAccounts.sumOf { acc -> accountUntaggedBalances[acc.id] ?: acc.initialBalance }
     }
 
-    val grandSecondaryTagTotals: Map<String, Double> by lazy {
-        allSecondaryTaggings.associateWith { tag ->
-            activeAccounts.sumOf { acc -> accountSecondaryTagBalances[acc.id]?.get(tag) ?: 0.0 }
+    private fun buildCategoryTypeTagSplitSection(
+        id: String,
+        title: String,
+        txType: TransactionType,
+        sign: Double
+    ): CategoryTypeTagSplitSection {
+        val tags = allTaggings
+        val matchingTxs = transactions.filter { it.txType() == txType }
+        if (matchingTxs.isEmpty()) {
+            return CategoryTypeTagSplitSection(
+                id = id,
+                title = title,
+                isIncome = txType == TransactionType.INCOME,
+                rows = emptyList(),
+                subtotal = 0.0,
+                tagSubtotals = tags.associateWith { 0.0 },
+                untaggedSubtotal = 0.0
+            )
         }
+
+        val rows = matchingTxs
+            .groupBy { it.categoryId ?: "uncategorized" }
+            .entries
+            .map { (catId, catTxs) ->
+                val catName = categoriesById[catId]?.name ?: "Uncategorized"
+                val tagSums = mutableMapOf<String, Double>()
+                var untaggedSum = 0.0
+                var catTotal = 0.0
+
+                // Track optional subcategory/ledger breakdowns
+                val subTagSums = mutableMapOf<String, MutableMap<String, Double>>()
+                val subUntagged = mutableMapOf<String, Double>()
+                val subTotals = mutableMapOf<String, Double>()
+
+                catTxs.forEach { tx ->
+                    val signedAmt = tx.amount * sign
+                    val catTag = tx.effectiveToTagging()
+                    catTotal += signedAmt
+                    if (catTag.isNullOrBlank()) {
+                        untaggedSum += signedAmt
+                    } else {
+                        tagSums[catTag] = (tagSums[catTag] ?: 0.0) + signedAmt
+                    }
+
+                    val subName = tx.subcategory?.trim()?.takeIf { it.isNotEmpty() }
+                    if (subName != null) {
+                        subTotals[subName] = (subTotals[subName] ?: 0.0) + signedAmt
+                        if (catTag.isNullOrBlank()) {
+                            subUntagged[subName] = (subUntagged[subName] ?: 0.0) + signedAmt
+                        } else {
+                            val subMap = subTagSums.getOrPut(subName) { mutableMapOf() }
+                            subMap[catTag] = (subMap[catTag] ?: 0.0) + signedAmt
+                        }
+                    }
+                }
+
+                val ledgerRows = subTotals.entries
+                    .sortedByDescending { abs(it.value) }
+                    .map { (subName, subTotal) ->
+                        CategoryTagSplitLedgerRow(
+                            key = "${id}_${catId}_$subName",
+                            name = subName,
+                            total = subTotal,
+                            tagValues = subTagSums[subName].orEmpty(),
+                            untaggedValue = subUntagged[subName] ?: 0.0
+                        )
+                    }
+
+                CategoryTagSplitRow(
+                    categoryId = catId,
+                    name = catName,
+                    total = catTotal,
+                    tagValues = tagSums,
+                    untaggedValue = untaggedSum,
+                    ledgers = ledgerRows
+                )
+            }
+            .sortedByDescending { abs(it.total) }
+
+        val sectionTagSubtotals = tags.associateWith { tag ->
+            rows.sumOf { it.tagValues[tag] ?: 0.0 }
+        }
+        return CategoryTypeTagSplitSection(
+            id = id,
+            title = title,
+            isIncome = txType == TransactionType.INCOME,
+            rows = rows,
+            subtotal = rows.sumOf { it.total },
+            tagSubtotals = sectionTagSubtotals,
+            untaggedSubtotal = rows.sumOf { it.untaggedValue }
+        )
     }
 
-    val grandSecondaryUntaggedTotal: Double by lazy {
-        activeAccounts.sumOf { acc -> accountSecondaryUntaggedBalances[acc.id] ?: acc.initialBalance }
+    val incomeTagSplitSection: CategoryTypeTagSplitSection by lazy {
+        buildCategoryTypeTagSplitSection(
+            id = "pnl_income",
+            title = "Income",
+            txType = TransactionType.INCOME,
+            sign = 1.0
+        )
+    }
+
+    val expenseTagSplitSection: CategoryTypeTagSplitSection by lazy {
+        buildCategoryTypeTagSplitSection(
+            id = "pnl_expenses",
+            title = "Expenses",
+            txType = TransactionType.EXPENSE,
+            sign = -1.0
+        )
+    }
+
+    val hasAnyCategoryUntaggedAmount: Boolean by lazy {
+        incomeTagSplitSection.rows.any { abs(it.untaggedValue) > 0.004 } ||
+            expenseTagSplitSection.rows.any { abs(it.untaggedValue) > 0.004 }
     }
 
     val accountHierarchy: List<MainGroupHierarchy> by lazy {
@@ -467,7 +572,6 @@ data class FilterState(
     val searchQuery: String = "",
     val favoritesOnly: Boolean = false,
     val selectedTagFilter: String? = null,
-    val selectedSecondaryTagFilter: String? = null,
     val statsPeriodType: StatsPeriodType = StatsPeriodType.MONTHLY,
     val statsIsExpenseTab: Boolean = true,
     val statsWeekOffset: Int = 0,
@@ -530,6 +634,8 @@ class LedgerViewModel(
         full.accountBalances
         full.accountSections
         full.accountHierarchy
+        full.incomeTagSplitSection
+        full.expenseTagSplitSection
         UiState.Success(full) as UiState<LedgerDataBundle>
     }
         .flowOn(Dispatchers.Default)
@@ -633,10 +739,6 @@ class LedgerViewModel(
         _filterState.value = _filterState.value.copy(selectedTagFilter = tag)
     }
 
-    fun setSecondaryTagFilter(tag: String?) {
-        _filterState.value = _filterState.value.copy(selectedSecondaryTagFilter = tag)
-    }
-
     fun setStatsPeriodType(type: StatsPeriodType) {
         _filterState.value = _filterState.value.copy(statsPeriodType = type)
     }
@@ -665,13 +767,9 @@ class LedgerViewModel(
                 cal.get(Calendar.MONTH) == filter.selectedMonth
             if (!sameMonth) return@filter false
             if (filter.favoritesOnly && !tx.favorite) return@filter false
-            val txTagging = tx.effectiveTagging()
-            val txSecondaryTagging = tx.effectiveSecondaryTagging()
-            if (filter.selectedTagFilter != null && !txTagging.equals(filter.selectedTagFilter, ignoreCase = true)) {
-                return@filter false
-            }
-            if (filter.selectedSecondaryTagFilter != null &&
-                !txSecondaryTagging.equals(filter.selectedSecondaryTagFilter, ignoreCase = true)
+            val txTaggings = tx.allEffectivePrimaryTaggings()
+            if (filter.selectedTagFilter != null &&
+                txTaggings.none { it.equals(filter.selectedTagFilter, ignoreCase = true) }
             ) {
                 return@filter false
             }
@@ -680,8 +778,8 @@ class LedgerViewModel(
                 val accName = bundle.accountName(tx.accountId).lowercase()
                 val destName = tx.toAccountId?.let { bundle.accountName(it).lowercase() }.orEmpty()
                 val match = tx.note.lowercase().contains(query) ||
-                    txTagging.orEmpty().lowercase().contains(query) ||
-                    txSecondaryTagging.orEmpty().lowercase().contains(query) ||
+                    tx.note2.lowercase().contains(query) ||
+                    txTaggings.any { it.lowercase().contains(query) } ||
                     tx.description.orEmpty().lowercase().contains(query) ||
                     tx.subcategory.orEmpty().lowercase().contains(query) ||
                     catName.contains(query) ||
@@ -1266,8 +1364,9 @@ class LedgerViewModel(
                         categoryId = resolvedCatId,
                         subcategory = parsed.subcategory,
                         note = parsed.note,
+                        note2 = parsed.note2,
                         tagging = parsed.tagging,
-                        secondaryTagging = parsed.secondaryTagging,
+                        toTagging = parsed.toTagging,
                         description = parsed.description
                     )
                     repository.saveTransaction(currentUserId, null, tx).getOrThrow()

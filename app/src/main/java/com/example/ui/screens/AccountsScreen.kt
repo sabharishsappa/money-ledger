@@ -140,30 +140,26 @@ fun AccountsScreen(
     // so individual ledgers are hidden until the user taps a group or its expand button.
     var collapsedMainGroupIds by remember { mutableStateOf(setOf<String>()) }
     var expandedGroupIds by remember { mutableStateOf(setOf<String>()) }
+    // Income & Expenses columnar P&L sections (collapsed by default; tap header to inspect categories/ledgers)
+    var expandedPnlSectionIds by remember { mutableStateOf(setOf<String>()) }
+    var expandedPnlCategoryKeys by remember { mutableStateOf(setOf<String>()) }
 
-    val hasPrimaryTaggings = bundle.allTaggings.isNotEmpty()
-    val hasSecondaryTaggings = bundle.allSecondaryTaggings.isNotEmpty()
-    var useSecondaryTagSplit by remember(hasPrimaryTaggings, hasSecondaryTaggings) {
-        mutableStateOf(!hasPrimaryTaggings && hasSecondaryTaggings)
-    }
-    val activeSplitIsSecondary = useSecondaryTagSplit && hasSecondaryTaggings
-
-    val taggings = if (activeSplitIsSecondary) bundle.allSecondaryTaggings else bundle.allTaggings
+    val taggings = bundle.allTaggings
     val showTagSplitColumns = taggings.isNotEmpty()
-    val includeUntaggedCol = showTagSplitColumns && if (activeSplitIsSecondary) {
-        bundle.hasAnySecondaryUntaggedBalance
-    } else {
-        bundle.hasAnyUntaggedBalance
-    }
-    val grandTagTotals = if (activeSplitIsSecondary) bundle.grandSecondaryTagTotals else bundle.grandTagTotals
-    val grandUntaggedTotal = if (activeSplitIsSecondary) bundle.grandSecondaryUntaggedTotal else bundle.grandUntaggedTotal
+    val includeUntaggedCol = showTagSplitColumns && (bundle.hasAnyUntaggedBalance || bundle.hasAnyCategoryUntaggedAmount)
+    val grandTagTotals = bundle.grandTagTotals
+    val grandUntaggedTotal = bundle.grandUntaggedTotal
     val sharedHScroll = rememberScrollState()
+
+    val pnlSections = remember(bundle.incomeTagSplitSection, bundle.expenseTagSplitSection) {
+        listOf(bundle.incomeTagSplitSection, bundle.expenseTagSplitSection).filter { it.rows.isNotEmpty() }
+    }
 
     val nonEmptySections = remember(bundle.accountSections) {
         bundle.accountSections.filter { it.accounts.isNotEmpty() }
     }
 
-    val natureSections = remember(bundle.accountHierarchy, taggings, activeSplitIsSecondary) {
+    val natureSections = remember(bundle.accountHierarchy, taggings) {
         bundle.accountHierarchy.mapNotNull { entry ->
             val matching = entry.subGroups.filter { it.accounts.isNotEmpty() }
             if (matching.isEmpty()) {
@@ -176,14 +172,9 @@ fun AccountsScreen(
                     sections = matching,
                     subtotal = matching.sumOf { it.subtotal },
                     tagSubtotals = taggings.associateWith { tag ->
-                        matching.sumOf { sec ->
-                            val map = if (activeSplitIsSecondary) sec.secondaryTagSubtotals else sec.tagSubtotals
-                            map[tag] ?: 0.0
-                        }
+                        matching.sumOf { sec -> sec.tagSubtotals[tag] ?: 0.0 }
                     },
-                    untaggedSubtotal = matching.sumOf { sec ->
-                        if (activeSplitIsSecondary) sec.secondaryUntaggedSubtotal else sec.untaggedSubtotal
-                    }
+                    untaggedSubtotal = matching.sumOf { sec -> sec.untaggedSubtotal }
                 )
             }
         }
@@ -433,52 +424,6 @@ fun AccountsScreen(
                 }
 
                 Column(modifier = Modifier.fillMaxSize()) {
-                    // Tagging 1 / Tagging 2 Switcher Strip when both dimensions have data
-                    if (hasPrimaryTaggings && hasSecondaryTaggings) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(LedgerSurface)
-                                .padding(horizontal = 12.dp, vertical = 7.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "Balance Split By",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = LedgerTextSecondary
-                            )
-                            Row(
-                                modifier = Modifier
-                                    .background(LedgerBackground, RoundedCornerShape(8.dp))
-                                    .padding(2.dp),
-                                horizontalArrangement = Arrangement.spacedBy(2.dp)
-                            ) {
-                                val tabs = listOf(false to "Tagging 1", true to "Tagging 2")
-                                tabs.forEach { (isSec, title) ->
-                                    val selected = activeSplitIsSecondary == isSec
-                                    val chipColor = if (isSec) LedgerAmber else LedgerCoral
-                                    Surface(
-                                        onClick = { useSecondaryTagSplit = isSec },
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = if (selected) chipColor.copy(alpha = 0.2f) else Color.Transparent,
-                                        border = if (selected) BorderStroke(1.dp, chipColor.copy(alpha = 0.6f)) else null,
-                                        modifier = Modifier.testTag(if (isSec) "accounts_split_tag2_tab" else "accounts_split_tag1_tab")
-                                    ) {
-                                        Text(
-                                            text = title,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                            color = if (selected) chipColor else LedgerTextSecondary,
-                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
-                    }
-
                     // Sticky Column Header + Tagging-Wise Totals Row on Top
                     if (showTagSplitColumns) {
                         TagSplitHeaderRow(
@@ -490,7 +435,7 @@ fun AccountsScreen(
                         HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
                         TagSplitDataRow(
                             label = "Total",
-                            subtitle = if (activeSplitIsSecondary) "Tagging 2-wise" else "Tagging-wise",
+                            subtitle = "Tagging-wise",
                             taggings = taggings,
                             tagValues = grandTagTotals,
                             includeUntagged = includeUntaggedCol,
@@ -632,9 +577,9 @@ fun AccountsScreen(
                                                     label = section.group.name,
                                                     subtitle = ledgerCountText,
                                                     taggings = taggings,
-                                                    tagValues = if (activeSplitIsSecondary) section.secondaryTagSubtotals else section.tagSubtotals,
+                                                    tagValues = section.tagSubtotals,
                                                     includeUntagged = includeUntaggedCol,
-                                                    untaggedValue = if (activeSplitIsSecondary) section.secondaryUntaggedSubtotal else section.untaggedSubtotal,
+                                                    untaggedValue = section.untaggedSubtotal,
                                                     totalValue = section.subtotal,
                                                     symbol = symbol,
                                                     scrollState = sharedHScroll,
@@ -740,9 +685,9 @@ fun AccountsScreen(
                                                         label = item.account.name,
                                                         subtitle = accountSubtitle,
                                                         taggings = taggings,
-                                                        tagValues = if (activeSplitIsSecondary) item.secondaryTagBalances else item.tagBalances,
+                                                        tagValues = item.tagBalances,
                                                         includeUntagged = includeUntaggedCol,
-                                                        untaggedValue = if (activeSplitIsSecondary) item.secondaryUntaggedBalance else item.untaggedBalance,
+                                                        untaggedValue = item.untaggedBalance,
                                                         totalValue = item.balance,
                                                         symbol = symbol,
                                                         scrollState = sharedHScroll,
@@ -804,6 +749,268 @@ fun AccountsScreen(
                                                     }
                                                 }
                                                 HorizontalDivider(color = LedgerDivider.copy(alpha = 0.6f), thickness = 0.5.dp)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Income & Expenses Tag-Split Sections (uses Expense/Income type tags in the same columnar table)
+                        if (pnlSections.isNotEmpty()) {
+                            item(key = "pnl_section_spacer", contentType = "pnl_spacer") {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                HorizontalDivider(color = LedgerBorder, thickness = 1.dp)
+                            }
+                            pnlSections.forEach { pnlSection ->
+                                val isPnlExpanded = pnlSection.id in expandedPnlSectionIds
+                                val pnlAccent = if (pnlSection.isIncome) assetAccentBlue else liabAccentCoral
+                                val togglePnl = {
+                                    expandedPnlSectionIds = if (isPnlExpanded) {
+                                        expandedPnlSectionIds - pnlSection.id
+                                    } else {
+                                        expandedPnlSectionIds + pnlSection.id
+                                    }
+                                }
+                                val catCountText = if (pnlSection.rows.size == 1) "1 category" else "${pnlSection.rows.size} categories"
+
+                                item(key = "pnl_hdr_${pnlSection.id}", contentType = "nature_hdr") {
+                                    Column(modifier = Modifier.animateItem()) {
+                                        if (showTagSplitColumns) {
+                                            TagSplitDataRow(
+                                                label = pnlSection.title,
+                                                subtitle = catCountText,
+                                                taggings = taggings,
+                                                tagValues = pnlSection.tagSubtotals,
+                                                includeUntagged = includeUntaggedCol,
+                                                untaggedValue = pnlSection.untaggedSubtotal,
+                                                totalValue = pnlSection.subtotal,
+                                                symbol = symbol,
+                                                scrollState = sharedHScroll,
+                                                widths = widths,
+                                                rowBackground = LedgerSurfaceElevated,
+                                                rowTier = AccountRowTier.NATURE_HEADER,
+                                                isExpanded = isPnlExpanded,
+                                                accentColor = pnlAccent,
+                                                modifier = Modifier.testTag("accounts_pnl_header_${pnlSection.id}"),
+                                                onClick = togglePnl
+                                            )
+                                        } else {
+                                            val chevronRot by animateFloatAsState(
+                                                targetValue = if (isPnlExpanded) 90f else 0f,
+                                                animationSpec = tween(180),
+                                                label = "pnl_chevron_${pnlSection.id}"
+                                            )
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .heightIn(min = 48.dp)
+                                                    .background(LedgerSurfaceElevated)
+                                                    .clickable(onClick = togglePnl)
+                                                    .padding(start = 10.dp, end = 14.dp, top = 10.dp, bottom = 10.dp)
+                                                    .testTag("accounts_pnl_header_${pnlSection.id}"),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    modifier = Modifier.weight(1f).padding(end = 10.dp)
+                                                ) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .width(3.dp)
+                                                            .height(20.dp)
+                                                            .background(pnlAccent, RoundedCornerShape(2.dp))
+                                                    )
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Icon(
+                                                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                                        contentDescription = if (isPnlExpanded) "Collapse ${pnlSection.title}" else "Expand ${pnlSection.title}",
+                                                        tint = pnlAccent,
+                                                        modifier = Modifier.size(20.dp).rotate(chevronRot)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Column {
+                                                        Text(
+                                                            text = pnlSection.title,
+                                                            style = MaterialTheme.typography.titleSmall,
+                                                            color = LedgerTextPrimary,
+                                                            fontWeight = FontWeight.Bold,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis
+                                                        )
+                                                        Text(
+                                                            text = catCountText,
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = LedgerTextMuted
+                                                        )
+                                                    }
+                                                }
+                                                Text(
+                                                    text = LedgerFormatters.formatSignedWhole(pnlSection.subtotal, symbol),
+                                                    style = TabularAmountStyle.copy(fontSize = 14.5.sp, fontWeight = FontWeight.Bold),
+                                                    color = if (pnlSection.subtotal.roundToLong() < 0L) LedgerCoral else LedgerBlue,
+                                                    maxLines = 1,
+                                                    softWrap = false
+                                                )
+                                            }
+                                        }
+                                        HorizontalDivider(color = LedgerDivider, thickness = 1.dp)
+                                    }
+                                }
+
+                                if (isPnlExpanded) {
+                                    pnlSection.rows.forEach { catRow ->
+                                        val catKey = "${pnlSection.id}_${catRow.categoryId}"
+                                        val hasSubLedgers = catRow.ledgers.isNotEmpty()
+                                        val isCatExpanded = hasSubLedgers && catKey in expandedPnlCategoryKeys
+                                        val toggleCat: (() -> Unit)? = if (hasSubLedgers) {
+                                            {
+                                                expandedPnlCategoryKeys = if (isCatExpanded) {
+                                                    expandedPnlCategoryKeys - catKey
+                                                } else {
+                                                    expandedPnlCategoryKeys + catKey
+                                                }
+                                            }
+                                        } else null
+                                        val catSubText = if (hasSubLedgers) {
+                                            if (catRow.ledgers.size == 1) "1 ledger" else "${catRow.ledgers.size} ledgers"
+                                        } else null
+
+                                        item(key = "pnl_cat_$catKey", contentType = "group_hdr") {
+                                            Column(modifier = Modifier.animateItem()) {
+                                                if (showTagSplitColumns) {
+                                                    TagSplitDataRow(
+                                                        label = catRow.name,
+                                                        subtitle = catSubText,
+                                                        taggings = taggings,
+                                                        tagValues = catRow.tagValues,
+                                                        includeUntagged = includeUntaggedCol,
+                                                        untaggedValue = catRow.untaggedValue,
+                                                        totalValue = catRow.total,
+                                                        symbol = symbol,
+                                                        scrollState = sharedHScroll,
+                                                        widths = widths,
+                                                        rowBackground = LedgerSurface,
+                                                        rowTier = if (hasSubLedgers) AccountRowTier.ACCOUNT_GROUP else AccountRowTier.LEDGER_ITEM,
+                                                        isExpanded = isCatExpanded,
+                                                        modifier = Modifier.testTag("accounts_pnl_cat_$catKey"),
+                                                        onClick = toggleCat
+                                                    )
+                                                } else {
+                                                    val catChevronRot by animateFloatAsState(
+                                                        targetValue = if (isCatExpanded) 90f else 0f,
+                                                        animationSpec = tween(180),
+                                                        label = "pnl_cat_chev_$catKey"
+                                                    )
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .heightIn(min = 48.dp)
+                                                            .background(LedgerSurface)
+                                                            .let { m -> if (toggleCat != null) m.clickable(onClick = toggleCat) else m }
+                                                            .padding(start = 16.dp, end = 14.dp, top = 10.dp, bottom = 10.dp)
+                                                            .testTag("accounts_pnl_cat_$catKey"),
+                                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Row(
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            modifier = Modifier.weight(1f).padding(end = 10.dp)
+                                                        ) {
+                                                            if (hasSubLedgers) {
+                                                                Icon(
+                                                                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                                                    contentDescription = if (isCatExpanded) "Collapse ${catRow.name}" else "Expand ${catRow.name}",
+                                                                    tint = LedgerTextSecondary,
+                                                                    modifier = Modifier.size(18.dp).rotate(catChevronRot)
+                                                                )
+                                                                Spacer(modifier = Modifier.width(8.dp))
+                                                            }
+                                                            Column {
+                                                                Text(
+                                                                    text = catRow.name,
+                                                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                                                                    color = LedgerTextPrimary,
+                                                                    maxLines = 1,
+                                                                    overflow = TextOverflow.Ellipsis
+                                                                )
+                                                                if (catSubText != null) {
+                                                                    Text(
+                                                                        text = catSubText,
+                                                                        style = MaterialTheme.typography.labelSmall,
+                                                                        color = LedgerTextMuted
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+                                                        Text(
+                                                            text = LedgerFormatters.formatSignedWhole(catRow.total, symbol),
+                                                            style = TabularAmountStyle.copy(fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold),
+                                                            color = if (catRow.total.roundToLong() < 0L) LedgerCoral else LedgerBlue,
+                                                            maxLines = 1,
+                                                            softWrap = false
+                                                        )
+                                                    }
+                                                }
+                                                HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                                            }
+                                        }
+
+                                        if (isCatExpanded) {
+                                            items(
+                                                items = catRow.ledgers,
+                                                key = { "pnl_sub_${it.key}" },
+                                                contentType = { "ledger_item" }
+                                            ) { ledgerRow ->
+                                                Column(modifier = Modifier.animateItem()) {
+                                                    if (showTagSplitColumns) {
+                                                        TagSplitDataRow(
+                                                            label = ledgerRow.name,
+                                                            subtitle = null,
+                                                            taggings = taggings,
+                                                            tagValues = ledgerRow.tagValues,
+                                                            includeUntagged = includeUntaggedCol,
+                                                            untaggedValue = ledgerRow.untaggedValue,
+                                                            totalValue = ledgerRow.total,
+                                                            symbol = symbol,
+                                                            scrollState = sharedHScroll,
+                                                            widths = widths,
+                                                            rowBackground = LedgerBackground,
+                                                            rowTier = AccountRowTier.LEDGER_ITEM,
+                                                            modifier = Modifier.testTag("accounts_pnl_sub_${ledgerRow.key}"),
+                                                            onClick = null
+                                                        )
+                                                    } else {
+                                                        Row(
+                                                            modifier = Modifier
+                                                                .fillMaxWidth()
+                                                                .heightIn(min = 44.dp)
+                                                                .background(LedgerBackground)
+                                                                .padding(start = 38.dp, end = 14.dp, top = 9.dp, bottom = 9.dp)
+                                                                .testTag("accounts_pnl_sub_${ledgerRow.key}"),
+                                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Text(
+                                                                text = ledgerRow.name,
+                                                                style = MaterialTheme.typography.bodyMedium,
+                                                                color = LedgerTextSecondary,
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis,
+                                                                modifier = Modifier.weight(1f).padding(end = 10.dp)
+                                                            )
+                                                            Text(
+                                                                text = LedgerFormatters.formatSignedWhole(ledgerRow.total, symbol),
+                                                                style = TabularAmountStyle.copy(fontSize = 13.5.sp),
+                                                                color = if (ledgerRow.total.roundToLong() < 0L) LedgerCoral else LedgerBlue,
+                                                                maxLines = 1,
+                                                                softWrap = false
+                                                            )
+                                                        }
+                                                    }
+                                                    HorizontalDivider(color = LedgerDivider.copy(alpha = 0.6f), thickness = 0.5.dp)
+                                                }
                                             }
                                         }
                                     }
@@ -1181,8 +1388,6 @@ fun AccountDetailScreen(
     val liveBalance = bundle.accountBalances[account.id] ?: account.initialBalance
     val tagSplits = bundle.accountTagBalances[account.id].orEmpty()
     val untaggedBal = bundle.accountUntaggedBalances[account.id] ?: account.initialBalance
-    val secondaryTagSplits = bundle.accountSecondaryTagBalances[account.id].orEmpty()
-    val secondaryUntaggedBal = bundle.accountSecondaryUntaggedBalances[account.id] ?: account.initialBalance
     val groupName = bundle.accountGroups.firstOrNull { it.id == account.groupId }?.name ?: "Account"
     val accountTransactions = remember(bundle.transactions, account.id) {
         bundle.transactions.filter { it.accountId == account.id || it.toAccountId == account.id }
@@ -1280,7 +1485,7 @@ fun AccountDetailScreen(
                     HorizontalDivider(color = LedgerDivider)
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = if (secondaryTagSplits.isNotEmpty()) "Balance Split by Tagging 1" else "Balance Split by Tagging",
+                        text = "Balance Split by Tagging",
                         style = MaterialTheme.typography.labelMedium,
                         color = LedgerTextSecondary
                     )
@@ -1308,44 +1513,6 @@ fun AccountDetailScreen(
                                 text = LedgerFormatters.formatSignedWhole(untaggedBal, symbol),
                                 style = TabularAmountStyle.copy(fontSize = 13.sp),
                                 color = if (untaggedBal.roundToLong() < 0L) LedgerCoral else LedgerBlue
-                            )
-                        }
-                    }
-                }
-
-                if (secondaryTagSplits.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    HorizontalDivider(color = LedgerDivider)
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text(
-                        text = "Balance Split by Tagging 2",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = LedgerAmber
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    secondaryTagSplits.entries.sortedBy { it.key }.forEach { (tagName, tagBal) ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(tagName, style = MaterialTheme.typography.bodySmall, color = LedgerTextPrimary)
-                            Text(
-                                text = LedgerFormatters.formatSignedWhole(tagBal, symbol),
-                                style = TabularAmountStyle.copy(fontSize = 13.sp),
-                                color = if (tagBal.roundToLong() < 0L) LedgerCoral else LedgerBlue
-                            )
-                        }
-                    }
-                    if (secondaryUntaggedBal.roundToLong() != 0L) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("Untagged", style = MaterialTheme.typography.bodySmall, color = LedgerTextMuted)
-                            Text(
-                                text = LedgerFormatters.formatSignedWhole(secondaryUntaggedBal, symbol),
-                                style = TabularAmountStyle.copy(fontSize = 13.sp),
-                                color = if (secondaryUntaggedBal.roundToLong() < 0L) LedgerCoral else LedgerBlue
                             )
                         }
                     }

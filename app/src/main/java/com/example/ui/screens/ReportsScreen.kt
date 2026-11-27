@@ -45,7 +45,6 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.AccountBalanceWallet
-import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -124,9 +123,8 @@ private enum class AvailableReport(val title: String) {
     STATS("Stats"),
     NET_WORTH("Net Worth"),
     CREDIT_CARDS("Credit Cards"),
-    SPENDING_TRENDS("Spending Trends"),
     MONTHLY_BUDGET("Monthly Budget"),
-    TAGGING_TRACKER("Tagging Tracker")
+    TAGGING_TRANSACTIONS("Tagging Transactions")
 }
 
 @Composable
@@ -136,7 +134,6 @@ fun ReportsScreen(
     viewModel: LedgerViewModel,
     onSelectAccount: (Account) -> Unit,
     onEditTransaction: (LedgerTransaction) -> Unit = {},
-    onAddExpense: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val symbol = bundle.settings.mainCurrencySymbol
@@ -155,9 +152,6 @@ fun ReportsScreen(
     }
     val statsPreview = remember(bundle.transactions, bundle.categories, filter) {
         viewModel.computeStats(bundle, filter)
-    }
-    val trendsPreview = remember(bundle.transactions, bundle.categories) {
-        viewModel.computeSpendingTrends(bundle, monthsCount = 6)
     }
     val budgetPreview = remember(bundle.transactions, bundle.categories, bundle.budgets) {
         val now = Calendar.getInstance()
@@ -239,10 +233,9 @@ fun ReportsScreen(
                         AvailableReport.STATS -> "Income & expense breakdown by category"
                         AvailableReport.NET_WORTH ->
                             series.lastOrNull()?.let { "Net Worth • Till ${it.fullLabel}" } ?: "Net Worth Summary"
-                        AvailableReport.CREDIT_CARDS -> "Credit card spending, payments & dues"
-                        AvailableReport.SPENDING_TRENDS -> "Past 6 months by expense category"
                         AvailableReport.MONTHLY_BUDGET -> "Category spending limits & usage progress"
-                        AvailableReport.TAGGING_TRACKER -> "Track Tagging 1 & Tagging 2 separately"
+                        AvailableReport.CREDIT_CARDS -> "Credit card spending, payments & dues"
+                        AvailableReport.TAGGING_TRANSACTIONS -> "Tagging-wise entries & accumulated balance"
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = LedgerTextSecondary,
@@ -417,22 +410,6 @@ fun ReportsScreen(
                                         modifier = Modifier.padding(start = 66.dp)
                                     )
                                     ReportListItemRow(
-                                        icon = Icons.Filled.BarChart,
-                                        iconTint = LedgerCoral,
-                                        title = "Spending Trends (6 Months)",
-                                        subtitle = "Bar chart of expenses by category",
-                                        previewValue = if (trendsPreview.sixMonthTotal > 0.0) {
-                                            LedgerFormatters.formatWholeAmount(trendsPreview.sixMonthTotal, symbol)
-                                        } else null,
-                                        previewColor = LedgerCoral,
-                                        onClick = { openedReport = AvailableReport.SPENDING_TRENDS },
-                                        modifier = Modifier.testTag("reports_list_item_spending_trends")
-                                    )
-                                    HorizontalDivider(
-                                        color = LedgerDivider,
-                                        modifier = Modifier.padding(start = 66.dp)
-                                    )
-                                    ReportListItemRow(
                                         icon = Icons.Filled.AccountBalanceWallet,
                                         iconTint = if (budgetPreview.totalBudgeted > 0.0) {
                                             budgetStatusColor(budgetPreview.overallRatio, budgetPreview.isOverBudget)
@@ -452,19 +429,18 @@ fun ReportsScreen(
                                         color = LedgerDivider,
                                         modifier = Modifier.padding(start = 66.dp)
                                     )
-                                    val tag1Count = bundle.allTaggings.size
-                                    val tag2Count = bundle.allSecondaryTaggings.size
+                                    val tagCount = bundle.allTaggings.size
                                     ReportListItemRow(
                                         icon = Icons.Filled.Label,
                                         iconTint = LedgerAmber,
-                                        title = "Tagging Tracker",
-                                        subtitle = "Track Tagging 1 & Tagging 2 separately",
-                                        previewValue = if (tag1Count > 0 || tag2Count > 0) {
-                                            "T1: $tag1Count • T2: $tag2Count"
+                                        title = "Tagging Transactions",
+                                        subtitle = "Tagging-wise ledger & accumulated balance",
+                                        previewValue = if (tagCount > 0) {
+                                            "$tagCount ${if (tagCount == 1) "tag" else "tags"}"
                                         } else null,
                                         previewColor = LedgerAmber,
-                                        onClick = { openedReport = AvailableReport.TAGGING_TRACKER },
-                                        modifier = Modifier.testTag("reports_list_item_tagging_tracker")
+                                        onClick = { openedReport = AvailableReport.TAGGING_TRANSACTIONS },
+                                        modifier = Modifier.testTag("reports_list_item_tagging_transactions")
                                     )
                                 }
                                 HorizontalDivider(color = LedgerDivider)
@@ -486,7 +462,6 @@ fun ReportsScreen(
                         filter = filter,
                         viewModel = viewModel,
                         onEditTransaction = onEditTransaction,
-                        onOpenSpendingTrends = { openedReport = AvailableReport.SPENDING_TRENDS },
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -513,18 +488,8 @@ fun ReportsScreen(
                     )
                 }
 
-                AvailableReport.SPENDING_TRENDS -> {
-                    SpendingTrendsContent(
-                        bundle = bundle,
-                        viewModel = viewModel,
-                        onEditTransaction = onEditTransaction,
-                        onAddExpense = onAddExpense,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-
-                AvailableReport.TAGGING_TRACKER -> {
-                    TaggingTrackerContent(
+                AvailableReport.TAGGING_TRANSACTIONS -> {
+                    TaggingTransactionsReportContent(
                         bundle = bundle,
                         onEditTransaction = onEditTransaction,
                         modifier = Modifier.fillMaxSize()

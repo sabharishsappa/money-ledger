@@ -210,7 +210,7 @@ fun TransactionsScreen(
                     Icon(
                         imageVector = Icons.Filled.FilterList,
                         contentDescription = "Filter by tagging",
-                        tint = if (filter.selectedTagFilter != null || filter.selectedSecondaryTagFilter != null) {
+                        tint = if (filter.selectedTagFilter != null) {
                             LedgerCoral
                         } else {
                             LedgerTextSecondary
@@ -228,7 +228,7 @@ fun TransactionsScreen(
                 OutlinedTextField(
                     value = filter.searchQuery,
                     onValueChange = { viewModel.setSearchQuery(it) },
-                    placeholder = { Text("Search note, category, account, tag...", color = LedgerTextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    placeholder = { Text("Search note 1, note 2, category, account, tag...", color = LedgerTextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     singleLine = true,
                     trailingIcon = {
                         if (filter.searchQuery.isNotEmpty()) {
@@ -253,107 +253,44 @@ fun TransactionsScreen(
                 )
             }
 
-            // Expandable Tagging 1 & Tagging 2 Filter Rows (Tracked Separately)
+            // Expandable Tagging Filter Row
             AnimatedVisibility(
-                visible = showTagFilterRow && (bundle.allTaggings.isNotEmpty() || bundle.allSecondaryTaggings.isNotEmpty()),
+                visible = showTagFilterRow && bundle.allTaggings.isNotEmpty(),
                 enter = LedgerMotion.expandEnter(),
                 exit = LedgerMotion.shrinkExit()
             ) {
-                Column(
+                LazyRow(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(LedgerSurface)
-                        .padding(vertical = 4.dp)
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (bundle.allTaggings.isNotEmpty()) {
-                        LazyRow(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 2.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (bundle.allSecondaryTaggings.isNotEmpty()) {
-                                item {
-                                    Text(
-                                        text = "Tag 1",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = LedgerTextMuted,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                }
-                            }
-                            item {
-                                FilterChip(
-                                    selected = filter.selectedTagFilter == null,
-                                    onClick = { viewModel.setTagFilter(null) },
-                                    label = { Text(if (bundle.allSecondaryTaggings.isNotEmpty()) "All" else "All Taggings") },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = LedgerCoral.copy(alpha = 0.22f),
-                                        selectedLabelColor = LedgerCoral
-                                    ),
-                                    modifier = Modifier.testTag("tx_tag1_filter_all")
-                                )
-                            }
-                            items(bundle.allTaggings) { tagging ->
-                                FilterChip(
-                                    selected = filter.selectedTagFilter == tagging,
-                                    onClick = {
-                                        viewModel.setTagFilter(if (filter.selectedTagFilter == tagging) null else tagging)
-                                    },
-                                    label = { Text(tagging) },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = LedgerCoral.copy(alpha = 0.22f),
-                                        selectedLabelColor = LedgerCoral
-                                    )
-                                )
-                            }
-                        }
+                    item {
+                        FilterChip(
+                            selected = filter.selectedTagFilter == null,
+                            onClick = { viewModel.setTagFilter(null) },
+                            label = { Text("All Taggings") },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = LedgerCoral.copy(alpha = 0.22f),
+                                selectedLabelColor = LedgerCoral
+                            ),
+                            modifier = Modifier.testTag("tx_tag1_filter_all")
+                        )
                     }
-                    if (bundle.allSecondaryTaggings.isNotEmpty()) {
-                        LazyRow(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 2.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            item {
-                                Text(
-                                    text = "Tag 2",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = LedgerAmber,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                            item {
-                                FilterChip(
-                                    selected = filter.selectedSecondaryTagFilter == null,
-                                    onClick = { viewModel.setSecondaryTagFilter(null) },
-                                    label = { Text("All") },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = LedgerAmber.copy(alpha = 0.22f),
-                                        selectedLabelColor = LedgerAmber
-                                    ),
-                                    modifier = Modifier.testTag("tx_tag2_filter_all")
-                                )
-                            }
-                            items(bundle.allSecondaryTaggings) { secTag ->
-                                FilterChip(
-                                    selected = filter.selectedSecondaryTagFilter == secTag,
-                                    onClick = {
-                                        viewModel.setSecondaryTagFilter(
-                                            if (filter.selectedSecondaryTagFilter == secTag) null else secTag
-                                        )
-                                    },
-                                    label = { Text(secTag) },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = LedgerAmber.copy(alpha = 0.22f),
-                                        selectedLabelColor = LedgerAmber
-                                    )
-                                )
-                            }
-                        }
+                    items(bundle.allTaggings) { tagging ->
+                        FilterChip(
+                            selected = filter.selectedTagFilter == tagging,
+                            onClick = {
+                                viewModel.setTagFilter(if (filter.selectedTagFilter == tagging) null else tagging)
+                            },
+                            label = { Text(tagging) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = LedgerCoral.copy(alpha = 0.22f),
+                                selectedLabelColor = LedgerCoral
+                            )
+                        )
                     }
                 }
             }
@@ -819,10 +756,18 @@ fun TransactionRowItem(
     val txType = tx.txType()
     val category = bundle.categoryById(tx.categoryId)
     val leftPrimary = when (txType) {
+        TransactionType.INCOME -> "Income"
+        TransactionType.EXPENSE -> "Expense"
         TransactionType.TRANSFER -> "Transfer"
-        else -> category?.name ?: "Uncategorized"
     }
-    val leftSecondary = if (txType != TransactionType.TRANSFER) tx.subcategory else null
+    val middleTitle = when {
+        tx.note.isNotBlank() -> tx.note
+        tx.note2.isNotBlank() -> tx.note2
+        txType == TransactionType.TRANSFER -> "Transfer"
+        !tx.subcategory.isNullOrBlank() -> tx.subcategory
+        else -> category?.name ?: leftPrimary
+    }
+    val secondaryNoteLine = if (tx.note.isNotBlank() && tx.note2.isNotBlank()) tx.note2 else null
 
     val accountRoute = remember(tx.id, txType, tx.accountId, tx.toAccountId, bundle.accounts) {
         when (txType) {
@@ -848,7 +793,7 @@ fun TransactionRowItem(
             .clickable(onClick = onClick)
             .testTag("tx_row_${tx.id}")
     ) {
-        val leftColWidth = (maxWidth * 0.25f).coerceIn(76.dp, 114.dp)
+        val leftColWidth = (maxWidth * 0.21f).coerceIn(66.dp, 88.dp)
 
         Row(
             modifier = Modifier
@@ -857,8 +802,13 @@ fun TransactionRowItem(
                 .padding(horizontal = 12.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Left Column: Category + Subcategory
-            Column(modifier = Modifier.width(leftColWidth).padding(end = 8.dp)) {
+            // Left Column: Transaction Type (Income / Expense / Transfer)
+            Box(
+                modifier = Modifier
+                    .width(leftColWidth)
+                    .padding(end = 8.dp),
+                contentAlignment = Alignment.CenterStart
+            ) {
                 Text(
                     text = leftPrimary,
                     style = MaterialTheme.typography.bodySmall,
@@ -866,22 +816,13 @@ fun TransactionRowItem(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                if (!leftSecondary.isNullOrBlank()) {
-                    Text(
-                        text = leftSecondary,
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                        color = LedgerTextMuted,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
             }
 
-            // Middle Column: Note / Description + Account Route
+            // Middle Column: Note / Ledger Title + Account Route
             Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = tx.note.ifBlank { leftPrimary },
+                        text = middleTitle,
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                         color = LedgerTextPrimary,
                         maxLines = 1,
@@ -898,6 +839,15 @@ fun TransactionRowItem(
                         )
                     }
                 }
+                if (secondaryNoteLine != null) {
+                    Text(
+                        text = secondaryNoteLine,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = LedgerTextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp)
@@ -910,8 +860,16 @@ fun TransactionRowItem(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
                     )
-                    val displayTagging = tx.effectiveTagging()
-                    val displaySecondaryTagging = tx.effectiveSecondaryTagging()
+                    val fromTag1 = tx.effectiveTagging()
+                    val toTag1 = tx.effectiveToTagging()
+                    val displayTagging = when {
+                        fromTag1 == null && toTag1 == null -> null
+                        fromTag1 != null && toTag1 == null -> fromTag1
+                        fromTag1 == null && toTag1 != null -> if (txType == TransactionType.TRANSFER) "— → $toTag1" else toTag1
+                        fromTag1.equals(toTag1, ignoreCase = true) -> fromTag1
+                        else -> "$fromTag1 → $toTag1"
+                    }
+
                     if (displayTagging != null) {
                         Box(
                             modifier = Modifier
@@ -923,25 +881,6 @@ fun TransactionRowItem(
                                 text = displayTagging,
                                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
                                 color = LedgerTextSecondary,
-                                maxLines = 1,
-                                softWrap = false,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                    if (displaySecondaryTagging != null) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(LedgerAmber.copy(alpha = 0.16f))
-                                .border(0.5.dp, LedgerAmber.copy(alpha = 0.45f), RoundedCornerShape(4.dp))
-                                .padding(horizontal = 5.dp, vertical = 1.dp)
-                        ) {
-                            Text(
-                                text = displaySecondaryTagging,
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                                color = LedgerAmber,
-                                fontWeight = FontWeight.Medium,
                                 maxLines = 1,
                                 softWrap = false,
                                 overflow = TextOverflow.Ellipsis

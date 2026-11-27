@@ -17,8 +17,9 @@ data class TransactionExportRow(
     val fromAccount: String,
     val toAccount: String,
     val note: String,
+    val note2: String = "",
     val tag: String,
-    val tag2: String = "",
+    val toTag: String = "",
     val description: String,
     val amount: Double,
     val txType: TransactionType = TransactionType.EXPENSE
@@ -52,8 +53,9 @@ object LedgerExcelExporter {
         sortedTx.forEach { tx ->
             val dateStr = formatExportDate(tx.epochDay)
             val noteStr = tx.note.trim()
+            val note2Str = tx.note2.trim()
             val tagStr = tx.effectiveTagging().orEmpty()
-            val tag2Str = tx.effectiveSecondaryTagging().orEmpty()
+            val toTagStr = tx.effectiveToTagging().orEmpty()
             val descStr = tx.description.orEmpty().trim()
             val amt = abs(tx.amount)
 
@@ -78,8 +80,9 @@ object LedgerExcelExporter {
                             fromAccount = accountName,
                             toAccount = expenseLedger,
                             note = noteStr,
+                            note2 = note2Str,
                             tag = tagStr,
-                            tag2 = tag2Str,
+                            toTag = toTagStr,
                             description = descStr,
                             amount = amt,
                             txType = TransactionType.EXPENSE
@@ -97,8 +100,9 @@ object LedgerExcelExporter {
                             fromAccount = incomeLedger,
                             toAccount = accountName,
                             note = noteStr,
+                            note2 = note2Str,
                             tag = tagStr,
-                            tag2 = tag2Str,
+                            toTag = toTagStr,
                             description = descStr,
                             amount = amt,
                             txType = TransactionType.INCOME
@@ -116,8 +120,9 @@ object LedgerExcelExporter {
                             fromAccount = fromAccount,
                             toAccount = toAccount,
                             note = noteStr,
+                            note2 = note2Str,
                             tag = tagStr,
-                            tag2 = tag2Str,
+                            toTag = toTagStr,
                             description = descStr,
                             amount = amt,
                             txType = TransactionType.TRANSFER
@@ -132,8 +137,8 @@ object LedgerExcelExporter {
                                 fromAccount = fromAccount,
                                 toAccount = "Transfer Fee",
                                 note = feeNote,
+                                note2 = note2Str,
                                 tag = tagStr,
-                                tag2 = tag2Str,
                                 description = descStr,
                                 amount = fee,
                                 txType = TransactionType.EXPENSE
@@ -149,7 +154,7 @@ object LedgerExcelExporter {
     fun buildCsv(bundle: LedgerDataBundle): String {
         val rows = buildExportRows(bundle)
         val sb = StringBuilder()
-        sb.appendLine("Date of Transaction,From Account,To Account,Note,Tag,Tag 2,Description,Amount")
+        sb.appendLine("Date of Transaction,From Account,To Account,Note 1,Note 2,Tag,To Tag,Description,Amount")
         fun esc(s: String) = "\"${s.replace("\"", "\"\"")}\""
         rows.forEach { row ->
             sb.appendLine(
@@ -158,8 +163,9 @@ object LedgerExcelExporter {
                     esc(row.fromAccount),
                     esc(row.toAccount),
                     esc(row.note),
+                    esc(row.note2),
                     esc(row.tag),
-                    esc(row.tag2),
+                    esc(row.toTag),
                     esc(row.description),
                     formatPlainNumeric(row.amount)
                 ).joinToString(",")
@@ -219,7 +225,7 @@ object LedgerExcelExporter {
         val sb = StringBuilder(rows.size * 280 + 1024)
         sb.append("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""")
         sb.append("""<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">""")
-        sb.append("""<dimension ref="A1:H$totalRows"/>""")
+        sb.append("""<dimension ref="A1:I$totalRows"/>""")
         sb.append(
             """<sheetViews><sheetView tabSelected="1" workbookViewId="0">""" +
                 """<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>""" +
@@ -232,10 +238,11 @@ object LedgerExcelExporter {
                 """<col min="2" max="2" width="26" customWidth="1"/>""" +
                 """<col min="3" max="3" width="26" customWidth="1"/>""" +
                 """<col min="4" max="4" width="24" customWidth="1"/>""" +
-                """<col min="5" max="5" width="16" customWidth="1"/>""" +
+                """<col min="5" max="5" width="24" customWidth="1"/>""" +
                 """<col min="6" max="6" width="16" customWidth="1"/>""" +
-                """<col min="7" max="7" width="30" customWidth="1"/>""" +
-                """<col min="8" max="8" width="16" customWidth="1"/>""" +
+                """<col min="7" max="7" width="16" customWidth="1"/>""" +
+                """<col min="8" max="8" width="30" customWidth="1"/>""" +
+                """<col min="9" max="9" width="16" customWidth="1"/>""" +
                 """</cols>"""
         )
         sb.append("""<sheetData>""")
@@ -245,11 +252,12 @@ object LedgerExcelExporter {
         appendInlineStrCell(sb, "A1", 1, "Date of Transaction")
         appendInlineStrCell(sb, "B1", 1, "From Account")
         appendInlineStrCell(sb, "C1", 1, "To Account")
-        appendInlineStrCell(sb, "D1", 1, "Note")
-        appendInlineStrCell(sb, "E1", 1, "Tag")
-        appendInlineStrCell(sb, "F1", 1, "Tag 2")
-        appendInlineStrCell(sb, "G1", 1, "Description")
-        appendInlineStrCell(sb, "H1", 1, "Amount")
+        appendInlineStrCell(sb, "D1", 1, "Note 1")
+        appendInlineStrCell(sb, "E1", 1, "Note 2")
+        appendInlineStrCell(sb, "F1", 1, "Tag")
+        appendInlineStrCell(sb, "G1", 1, "To Tag")
+        appendInlineStrCell(sb, "H1", 1, "Description")
+        appendInlineStrCell(sb, "I1", 1, "Amount")
         sb.append("""</row>""")
 
         // Data rows (1 row per transaction: From Account = Credit, To Account = Debit)
@@ -265,15 +273,16 @@ object LedgerExcelExporter {
             appendInlineStrCell(sb, "B$r", 0, row.fromAccount)
             appendInlineStrCell(sb, "C$r", 0, row.toAccount)
             appendInlineStrCell(sb, "D$r", 0, row.note)
-            appendInlineStrCell(sb, "E$r", 0, row.tag)
-            appendInlineStrCell(sb, "F$r", 0, row.tag2)
-            appendInlineStrCell(sb, "G$r", 0, row.description)
-            sb.append("""<c r="H$r" s="$amountStyle"><v>${formatPlainNumeric(row.amount)}</v></c>""")
+            appendInlineStrCell(sb, "E$r", 0, row.note2)
+            appendInlineStrCell(sb, "F$r", 0, row.tag)
+            appendInlineStrCell(sb, "G$r", 0, row.toTag)
+            appendInlineStrCell(sb, "H$r", 0, row.description)
+            sb.append("""<c r="I$r" s="$amountStyle"><v>${formatPlainNumeric(row.amount)}</v></c>""")
             sb.append("""</row>""")
         }
 
         sb.append("""</sheetData>""")
-        sb.append("""<autoFilter ref="A1:H$totalRows"/>""")
+        sb.append("""<autoFilter ref="A1:I$totalRows"/>""")
         sb.append("""</worksheet>""")
         return sb.toString()
     }

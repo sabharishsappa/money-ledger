@@ -86,8 +86,9 @@ data class LocalTransactionEntity(
     val categoryId: String?,
     val subcategory: String?,
     val note: String,
+    val note2: String = "",
     val tagging: String?,
-    val secondaryTagging: String? = null,
+    val toTagging: String? = null,
     val description: String?,
     val favorite: Boolean,
     val repeatFrequency: String
@@ -230,7 +231,7 @@ interface LocalLedgerDao {
         LocalBudgetEntity::class,
         LocalFinanceNoteEntity::class
     ],
-    version = 3,
+    version = 5,
     exportSchema = false
 )
 abstract class LocalLedgerDatabase : RoomDatabase() {
@@ -269,6 +270,62 @@ abstract class LocalLedgerDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `local_transactions` ADD COLUMN `toTagging` TEXT")
+                db.execSQL("ALTER TABLE `local_transactions` ADD COLUMN `toSecondaryTagging` TEXT")
+                db.execSQL(
+                    "UPDATE `local_transactions` SET `toTagging` = `tagging`, `toSecondaryTagging` = `secondaryTagging` WHERE `type` = 'TRANSFER'"
+                )
+            }
+        }
+
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `local_transactions_new` (
+                        `id` TEXT NOT NULL,
+                        `userId` TEXT NOT NULL,
+                        `type` TEXT NOT NULL,
+                        `amount` REAL NOT NULL,
+                        `feeAmount` REAL NOT NULL,
+                        `epochDay` INTEGER NOT NULL,
+                        `timestampMillis` INTEGER NOT NULL,
+                        `accountId` TEXT NOT NULL,
+                        `toAccountId` TEXT,
+                        `categoryId` TEXT,
+                        `subcategory` TEXT,
+                        `note` TEXT NOT NULL,
+                        `note2` TEXT NOT NULL,
+                        `tagging` TEXT,
+                        `toTagging` TEXT,
+                        `description` TEXT,
+                        `favorite` INTEGER NOT NULL,
+                        `repeatFrequency` TEXT NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO `local_transactions_new` (
+                        `id`, `userId`, `type`, `amount`, `feeAmount`, `epochDay`, `timestampMillis`,
+                        `accountId`, `toAccountId`, `categoryId`, `subcategory`, `note`, `note2`,
+                        `tagging`, `toTagging`, `description`, `favorite`, `repeatFrequency`
+                    )
+                    SELECT
+                        `id`, `userId`, `type`, `amount`, `feeAmount`, `epochDay`, `timestampMillis`,
+                        `accountId`, `toAccountId`, `categoryId`, `subcategory`, `note`, '',
+                        `tagging`, `toTagging`, `description`, `favorite`, `repeatFrequency`
+                    FROM `local_transactions`
+                    """.trimIndent()
+                )
+                db.execSQL("DROP TABLE `local_transactions`")
+                db.execSQL("ALTER TABLE `local_transactions_new` RENAME TO `local_transactions`")
+            }
+        }
+
         fun getInstance(context: Context): LocalLedgerDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -276,7 +333,7 @@ abstract class LocalLedgerDatabase : RoomDatabase() {
                     LocalLedgerDatabase::class.java,
                     "money_ledger_local.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { INSTANCE = it }

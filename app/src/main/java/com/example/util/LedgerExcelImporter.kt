@@ -22,8 +22,10 @@ data class RawImportRow(
     val fromAccountRaw: String,
     val toAccountRaw: String,
     val note: String,
+    val note2: String = "",
     val tag: String,
-    val tag2: String = "",
+    val hasExplicitToTagCol: Boolean = false,
+    val toTag: String = "",
     val description: String,
     val amountRaw: String
 )
@@ -41,8 +43,9 @@ data class ParsedImportTransaction(
     val existingCategoryId: String? = null,
     val subcategory: String? = null,
     val note: String,
+    val note2: String = "",
     val tagging: String?,
-    val secondaryTagging: String? = null,
+    val toTagging: String? = null,
     val description: String?
 )
 
@@ -425,8 +428,9 @@ object LedgerExcelImporter {
         var fromCol = 1
         var toCol = 2
         var noteCol = 3
+        var note2Col = -1
         var tagCol = 4
-        var tag2Col = -1
+        var toTagCol = -1
         var descCol = 5
         var amountCol = 6
         var startIdx = 0
@@ -447,11 +451,12 @@ object LedgerExcelImporter {
             normalizedHeader.forEach { (col, name) ->
                 when {
                     name.contains("date") -> dateCol = col
+                    name == "to tag" || name == "to tag 1" || name == "to tag1" || name == "to tagging" || name == "to tagging 1" || name == "destination tag" -> toTagCol = col
+                    name == "from tag" || name == "from tag 1" || name == "from tag1" || name == "from tagging" || name == "tag" || name == "tag 1" || name == "tag1" || name == "tagging" || name == "tagging 1" || name == "tags" -> tagCol = col
                     name.contains("from") || name.contains("credit") || name == "cr" -> fromCol = col
                     name.startsWith("to ") || name == "to" || name.contains("to account") || name.contains("debit") || name == "dr" -> toCol = col
-                    name == "note" || name == "memo" || name == "narration" -> noteCol = col
-                    name == "tag 2" || name == "tag2" || name == "tagging 2" || name == "tagging2" || name == "second tag" || name == "secondary tag" || name == "secondary tagging" -> tag2Col = col
-                    name == "tag" || name == "tag 1" || name == "tag1" || name == "tagging" || name == "tagging 1" || name == "tags" -> tagCol = col
+                    name == "note 2" || name == "note2" || name == "second note" || name == "memo 2" || name == "narration 2" -> note2Col = col
+                    name == "note 1" || name == "note1" || name == "note" || name == "memo" || name == "narration" -> noteCol = col
                     name.contains("description") || name.contains("remark") -> descCol = col
                     name == "amount" || name.startsWith("amount") -> amountCol = col
                 }
@@ -459,6 +464,7 @@ object LedgerExcelImporter {
             startIdx = 1
         }
 
+        val hasExplicitToTag = toTagCol >= 0
         val out = ArrayList<RawImportRow>((grid.size - startIdx).coerceAtLeast(0))
         for (idx in startIdx until grid.size) {
             val (rowNum, cells) = grid[idx]
@@ -466,8 +472,9 @@ object LedgerExcelImporter {
             val fromVal = cells[fromCol].orEmpty().trim()
             val toVal = cells[toCol].orEmpty().trim()
             val noteVal = cells[noteCol].orEmpty().trim()
+            val note2Val = if (note2Col >= 0) cells[note2Col].orEmpty().trim() else ""
             val tagVal = cells[tagCol].orEmpty().trim()
-            val tag2Val = if (tag2Col >= 0) cells[tag2Col].orEmpty().trim() else ""
+            val toTagVal = if (toTagCol >= 0) cells[toTagCol].orEmpty().trim() else ""
             val descVal = cells[descCol].orEmpty().trim()
             val amtVal = cells[amountCol].orEmpty().trim()
 
@@ -479,8 +486,10 @@ object LedgerExcelImporter {
                     fromAccountRaw = fromVal,
                     toAccountRaw = toVal,
                     note = noteVal,
+                    note2 = note2Val,
                     tag = tagVal,
-                    tag2 = tag2Val,
+                    hasExplicitToTagCol = hasExplicitToTag,
+                    toTag = toTagVal,
                     description = descVal,
                     amountRaw = amtVal
                 )
@@ -605,19 +614,24 @@ object LedgerExcelImporter {
                     warnings.add("Row ${raw.excelRowNumber}: invalid or zero amount \"${raw.amountRaw}\" — skipped.")
                     return@forEach
                 }
-                raw.fromAccountRaw.equals(raw.toAccountRaw, ignoreCase = true) -> {
+                raw.fromAccountRaw.equals(raw.toAccountRaw, ignoreCase = true) &&
+                    (!raw.hasExplicitToTagCol || raw.tag.equals(raw.toTag, ignoreCase = true)) -> {
                     warnings.add("Row ${raw.excelRowNumber}: From Account and To Account are identical — skipped.")
                     return@forEach
                 }
             }
 
             // Standard rule: From Account = Credit, To Account = Debit (negative amount reverses direction)
-            val creditName = if (parsedAmt > 0.0) raw.fromAccountRaw.trim() else raw.toAccountRaw.trim()
-            val debitName = if (parsedAmt > 0.0) raw.toAccountRaw.trim() else raw.fromAccountRaw.trim()
+            val reversed = parsedAmt < 0.0
+            val creditName = if (!reversed) raw.fromAccountRaw.trim() else raw.toAccountRaw.trim()
+            val debitName = if (!reversed) raw.toAccountRaw.trim() else raw.fromAccountRaw.trim()
             val txAmount = abs(parsedAmt)
             val txNote = raw.note.trim()
-            val txTag = raw.tag.trim().takeIf { it.isNotBlank() }
-            val txTag2 = raw.tag2.trim().takeIf { it.isNotBlank() }
+            val txNote2 = raw.note2.trim()
+            val rawFromTag = raw.tag.trim().takeIf { it.isNotBlank() }
+            val rawToTag = if (raw.hasExplicitToTagCol) raw.toTag.trim().takeIf { it.isNotBlank() } else rawFromTag
+            val txTag = if (!reversed) rawFromTag else rawToTag
+            val txToTag = if (!reversed) rawToTag else rawFromTag
             val txDesc = raw.description.trim().takeIf { it.isNotBlank() }
 
             // Fold Transfer Fee row exported immediately after its parent Transfer
@@ -656,6 +670,8 @@ object LedgerExcelImporter {
                 newIncomeCats.containsKey(creditBaseKey) ||
                 creditSub != null
 
+            val explicitCategoryToTag = if (raw.hasExplicitToTagCol) raw.toTag.trim().takeIf { it.isNotBlank() } else null
+
             val parsed = when {
                 // Transfer: From Account (Credit) -> To Account (Debit), both are Accounts
                 debitIsKnownAccount && creditIsKnownAccount -> {
@@ -668,8 +684,9 @@ object LedgerExcelImporter {
                         toAccountName = debitName,
                         existingToAccountId = debitAccId,
                         note = txNote,
+                        note2 = txNote2,
                         tagging = txTag,
-                        secondaryTagging = txTag2,
+                        toTagging = txToTag,
                         description = txDesc
                     )
                 }
@@ -687,8 +704,9 @@ object LedgerExcelImporter {
                         existingCategoryId = expRef.existingCategoryId,
                         subcategory = expRef.subcategory,
                         note = txNote,
+                        note2 = txNote2,
                         tagging = txTag,
-                        secondaryTagging = txTag2,
+                        toTagging = explicitCategoryToTag,
                         description = txDesc
                     )
                 }
@@ -706,8 +724,9 @@ object LedgerExcelImporter {
                         existingCategoryId = incRef.existingCategoryId,
                         subcategory = incRef.subcategory,
                         note = txNote,
-                        tagging = txTag,
-                        secondaryTagging = txTag2,
+                        note2 = txNote2,
+                        tagging = rawFromTag,
+                        toTagging = explicitCategoryToTag,
                         description = txDesc
                     )
                 }
@@ -726,8 +745,9 @@ object LedgerExcelImporter {
                         existingCategoryId = incRef.existingCategoryId,
                         subcategory = incRef.subcategory,
                         note = txNote,
-                        tagging = txTag,
-                        secondaryTagging = txTag2,
+                        note2 = txNote2,
+                        tagging = rawFromTag,
+                        toTagging = explicitCategoryToTag,
                         description = txDesc
                     )
                 }
@@ -746,8 +766,9 @@ object LedgerExcelImporter {
                         existingCategoryId = expRef.existingCategoryId,
                         subcategory = expRef.subcategory,
                         note = txNote,
+                        note2 = txNote2,
                         tagging = txTag,
-                        secondaryTagging = txTag2,
+                        toTagging = explicitCategoryToTag,
                         description = txDesc
                     )
                 }
