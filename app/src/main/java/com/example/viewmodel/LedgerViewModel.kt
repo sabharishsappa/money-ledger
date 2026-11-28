@@ -691,6 +691,11 @@ class LedgerViewModel(
         )
     }
 
+    fun shiftYear(delta: Int) {
+        val f = _filterState.value
+        _filterState.value = f.copy(selectedYear = f.selectedYear + delta)
+    }
+
     fun previousStatsPeriod() {
         val f = _filterState.value
         when (f.statsPeriodType) {
@@ -1534,7 +1539,6 @@ class LedgerViewModel(
         viewModelScope.launch {
             val result = repository.saveTransaction(currentUserId, existingId, tx)
             result.onSuccess {
-                _toastMessage.tryEmit(if (existingId == null) "Transaction saved" else "Transaction updated")
                 onComplete(true)
             }.onFailure { err ->
                 _toastMessage.tryEmit(err.localizedMessage ?: "Could not save transaction")
@@ -1758,9 +1762,28 @@ class LedgerViewModel(
         }
     }
 
-    fun saveBudget(categoryId: String, monthlyLimit: Double) {
+    fun renameTagging(oldTag: String, newTag: String) {
+        val cleanOld = oldTag.trim()
+        val cleanNew = newTag.trim().take(60)
+        if (cleanOld.isEmpty() || cleanNew.isEmpty()) {
+            _toastMessage.tryEmit("Tagging name cannot be empty")
+            return
+        }
+        if (cleanOld == cleanNew) return
         viewModelScope.launch {
-            repository.saveBudget(currentUserId, categoryId, monthlyLimit)
+            repository.renameTagging(currentUserId, cleanOld, cleanNew)
+                .onSuccess { count ->
+                    _toastMessage.tryEmit("Renamed \"$cleanOld\" to \"$cleanNew\" ($count updated)")
+                }
+                .onFailure {
+                    _toastMessage.tryEmit(it.localizedMessage ?: "Failed to rename tagging")
+                }
+        }
+    }
+
+    fun saveBudget(categoryId: String, monthlyLimit: Double, subcategory: String? = null) {
+        viewModelScope.launch {
+            repository.saveBudget(currentUserId, categoryId, monthlyLimit, subcategory)
                 .onSuccess { _toastMessage.tryEmit("Budget updated") }
                 .onFailure { _toastMessage.tryEmit(it.localizedMessage ?: "Failed to save budget") }
         }

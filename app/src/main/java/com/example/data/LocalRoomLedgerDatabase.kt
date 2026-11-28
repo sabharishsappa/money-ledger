@@ -99,6 +99,7 @@ data class LocalBudgetEntity(
     @PrimaryKey val id: String,
     val userId: String,
     val categoryId: String,
+    val subcategory: String? = null,
     val monthlyLimit: Double
 )
 
@@ -201,6 +202,18 @@ interface LocalLedgerDao {
     @Query("DELETE FROM local_transactions WHERE id = :id AND userId = :userId")
     suspend fun deleteTransaction(userId: String, id: String)
 
+    @Query(
+        "UPDATE local_transactions SET tagging = :newTag " +
+            "WHERE userId = :userId AND tagging IS NOT NULL AND LOWER(TRIM(tagging)) = LOWER(TRIM(:oldTag))"
+    )
+    suspend fun renameTransactionTagging(userId: String, oldTag: String, newTag: String): Int
+
+    @Query(
+        "UPDATE local_transactions SET toTagging = :newTag " +
+            "WHERE userId = :userId AND toTagging IS NOT NULL AND LOWER(TRIM(toTagging)) = LOWER(TRIM(:oldTag))"
+    )
+    suspend fun renameTransactionToTagging(userId: String, oldTag: String, newTag: String): Int
+
     @Query("SELECT * FROM local_budgets WHERE userId = :userId")
     fun observeBudgets(userId: String): Flow<List<LocalBudgetEntity>>
 
@@ -231,7 +244,7 @@ interface LocalLedgerDao {
         LocalBudgetEntity::class,
         LocalFinanceNoteEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class LocalLedgerDatabase : RoomDatabase() {
@@ -326,6 +339,12 @@ abstract class LocalLedgerDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `local_budgets` ADD COLUMN `subcategory` TEXT")
+            }
+        }
+
         fun getInstance(context: Context): LocalLedgerDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -333,7 +352,13 @@ abstract class LocalLedgerDatabase : RoomDatabase() {
                     LocalLedgerDatabase::class.java,
                     "money_ledger_local.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(
+                        MIGRATION_1_2,
+                        MIGRATION_2_3,
+                        MIGRATION_3_4,
+                        MIGRATION_4_5,
+                        MIGRATION_5_6
+                    )
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { INSTANCE = it }

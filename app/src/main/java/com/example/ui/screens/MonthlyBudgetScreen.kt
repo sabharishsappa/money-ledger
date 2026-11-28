@@ -3,13 +3,7 @@ package com.example.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -42,6 +36,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -81,14 +76,16 @@ import com.example.data.Category
 import com.example.data.CategoryType
 import com.example.data.LedgerTransaction
 import com.example.data.TransactionType
+import com.example.ui.components.ConfirmDestructiveDialog
+import com.example.ui.components.horizontalPeriodSwipe
 import com.example.ui.theme.LedgerAmber
 import com.example.ui.theme.LedgerBackground
 import com.example.ui.theme.LedgerBlue
 import com.example.ui.theme.LedgerBorder
 import com.example.ui.theme.LedgerCoral
-import com.example.ui.theme.LedgerMotion
 import com.example.ui.theme.LedgerDivider
 import com.example.ui.theme.LedgerGreen
+import com.example.ui.theme.LedgerMotion
 import com.example.ui.theme.LedgerSurface
 import com.example.ui.theme.LedgerSurfaceElevated
 import com.example.ui.theme.LedgerSurfaceHighlight
@@ -105,12 +102,43 @@ import kotlin.math.ceil
 import kotlin.math.roundToInt
 
 @Immutable
+data class BudgetTarget(
+    val category: Category,
+    val subcategory: String? = null
+) {
+    val normalizedSubcategory: String?
+        get() = subcategory?.trim()?.takeIf { it.isNotEmpty() }
+
+    val isLedgerLevel: Boolean
+        get() = normalizedSubcategory != null
+
+    val displayTitle: String
+        get() = normalizedSubcategory ?: category.name
+
+    val uniqueKey: String
+        get() = Budget.buildDocId(category.id, normalizedSubcategory)
+}
+
+@Immutable
 data class CategoryBudgetProgress(
     val category: Category,
+    val subcategory: String? = null,
     val budget: Budget,
     val spent: Double,
     val transactions: List<LedgerTransaction>
 ) {
+    val normalizedSubcategory: String?
+        get() = subcategory?.trim()?.takeIf { it.isNotEmpty() }
+
+    val isLedgerLevel: Boolean
+        get() = normalizedSubcategory != null
+
+    val displayTitle: String
+        get() = normalizedSubcategory ?: category.name
+
+    val uniqueKey: String
+        get() = budget.id.ifBlank { Budget.buildDocId(category.id, normalizedSubcategory) }
+
     val ratio: Float
         get() = if (budget.monthlyLimit > 0.0) (spent / budget.monthlyLimit).toFloat() else 0f
 
@@ -128,10 +156,19 @@ data class CategoryBudgetProgress(
 }
 
 @Immutable
-data class UnbudgetedCategorySpend(
-    val category: Category,
+data class UnbudgetedLedgerSpend(
+    val name: String,
     val spent: Double,
     val entryCount: Int
+)
+
+@Immutable
+data class UnbudgetedCategorySpend(
+    val category: Category,
+    val isGroupBudgeted: Boolean,
+    val spent: Double,
+    val entryCount: Int,
+    val unbudgetedLedgers: List<UnbudgetedLedgerSpend>
 )
 
 @Immutable
@@ -183,52 +220,129 @@ fun computeMonthlyBudgetSummary(
         .filter { it.categoryType() == CategoryType.EXPENSE }
         .sortedBy { it.sortOrder }
 
-    val activeBudgetsByCatId = bundle.budgets
-        .filter { it.monthlyLimit > 0.0 }
+    val activeBudgets = bundle.budgets.filter { it.monthlyLimit > 0.0 }
+    val groupBudgetByCatId = activeBudgets
+        .filter { !it.isLedgerBudget() }
         .associateBy { it.categoryId }
+    val ledgerBudgetsByCatId = activeBudgets
+        .filter { it.isLedgerBudget() }
+        .groupBy { it.categoryId }
 
     val budgetedList = mutableListOf<CategoryBudgetProgress>()
     val unbudgetedList = mutableListOf<UnbudgetedCategorySpend>()
 
     expenseCategories.forEach { cat ->
         val catTxs = txByCategory[cat.id].orEmpty().sortedByDescending { it.epochDay }
-        val spent = catTxs.sumOf { it.amount }
-        val budget = activeBudgetsByCatId[cat.id]
-        if (budget != null) {
+        val groupSpent = catTxs.sumOf { it.amount }
+        val groupBudget = groupBudgetByCatId[cat.id]
+
+        if (groupBudget != null) {
             budgetedList.add(
                 CategoryBudgetProgress(
                     category = cat,
-                    budget = budget,
-                    spent = spent,
+                    subcategory = null,
+                    budget = groupBudget,
+                    spent = groupSpent,
                     transactions = catTxs
                 )
             )
-        } else {
+        }
+
+        // Collect all known ledgers (configured subcategories + tx subcategories + saved ledger budgets)
+        val catLedgerBudgets = ledgerBudgetsByCatId[cat.id].orEmpty()
+        val ledgerBudgetByLower = catLedgerBudgets.associateBy {
+            it.normalizedSubcategory().orEmpty().lowercase()
+        }
+
+        val canonicalLedgers = linkedMapOf<String, String>()
+        cat.subcategories.forEach { raw ->
+            val trimmed = raw.trim()
+            if (trimmed.isNotEmpty()) canonicalLedgers.putIfAbsent(trimmed.lowercase(), trimmed)
+        }
+        catTxs.forEach { tx ->
+            val trimmed = tx.subcategory?.trim().orEmpty()
+            if (trimmed.isNotEmpty()) canonicalLedgers.putIfAbsent(trimmed.lowercase(), trimmed)
+        }
+        catLedgerBudgets.forEach { b ->
+            val trimmed = b.normalizedSubcategory().orEmpty()
+            if (trimmed.isNotEmpty()) canonicalLedgers.putIfAbsent(trimmed.lowercase(), trimmed)
+        }
+
+        val unbudgetedLedgers = mutableListOf<UnbudgetedLedgerSpend>()
+        canonicalLedgers.forEach { (lowerKey, displayName) ->
+            val subTxs = catTxs.filter { it.subcategory?.trim().equals(displayName, ignoreCase = true) }
+            val subSpent = subTxs.sumOf { it.amount }
+            val subBudget = ledgerBudgetByLower[lowerKey]
+            if (subBudget != null) {
+                budgetedList.add(
+                    CategoryBudgetProgress(
+                        category = cat,
+                        subcategory = displayName,
+                        budget = subBudget,
+                        spent = subSpent,
+                        transactions = subTxs
+                    )
+                )
+            } else {
+                unbudgetedLedgers.add(
+                    UnbudgetedLedgerSpend(
+                        name = displayName,
+                        spent = subSpent,
+                        entryCount = subTxs.size
+                    )
+                )
+            }
+        }
+
+        if (groupBudget == null || unbudgetedLedgers.isNotEmpty()) {
             unbudgetedList.add(
                 UnbudgetedCategorySpend(
                     category = cat,
-                    spent = spent,
-                    entryCount = catTxs.size
+                    isGroupBudgeted = groupBudget != null,
+                    spent = groupSpent,
+                    entryCount = catTxs.size,
+                    unbudgetedLedgers = unbudgetedLedgers.sortedWith(
+                        compareByDescending<UnbudgetedLedgerSpend> { it.spent }
+                            .thenBy { it.name.lowercase() }
+                    )
                 )
             )
         }
     }
 
-    // Show highest usage % first so categories near/over limit are immediately visible
+    // Show highest usage % first so items near/over limit are immediately visible
     val sortedBudgeted = budgetedList.sortedWith(
         compareByDescending<CategoryBudgetProgress> { it.ratio }
             .thenByDescending { it.spent }
             .thenBy { it.category.name.lowercase() }
+            .thenBy { it.isLedgerLevel }
+            .thenBy { it.displayTitle.lowercase() }
     )
-    // Show unbudgeted categories with active spend first so users notice where to set limits
+
+    // Show unbudgeted expense groups first, then partially budgeted groups with available ledgers
     val sortedUnbudgeted = unbudgetedList.sortedWith(
-        compareByDescending<UnbudgetedCategorySpend> { it.spent }
+        compareBy<UnbudgetedCategorySpend> { it.isGroupBudgeted }
+            .thenByDescending { it.spent }
             .thenBy { it.category.sortOrder }
     )
 
+    // Avoid double-counting overall hero totals when both a group budget and child ledger budgets exist
+    var totalBudgeted = 0.0
+    var totalSpentInBudgeted = 0.0
+    sortedBudgeted.groupBy { it.category.id }.values.forEach { itemsForCat ->
+        val groupItem = itemsForCat.firstOrNull { !it.isLedgerLevel }
+        if (groupItem != null) {
+            totalBudgeted += groupItem.budget.monthlyLimit
+            totalSpentInBudgeted += groupItem.spent
+        } else {
+            totalBudgeted += itemsForCat.sumOf { it.budget.monthlyLimit }
+            totalSpentInBudgeted += itemsForCat.sumOf { it.spent }
+        }
+    }
+
     return MonthlyBudgetSummary(
-        totalBudgeted = sortedBudgeted.sumOf { it.budget.monthlyLimit },
-        totalSpentInBudgeted = sortedBudgeted.sumOf { it.spent },
+        totalBudgeted = totalBudgeted,
+        totalSpentInBudgeted = totalSpentInBudgeted,
         totalMonthExpense = monthExpenses.sumOf { it.amount },
         budgetedItems = sortedBudgeted,
         unbudgetedItems = sortedUnbudgeted,
@@ -281,7 +395,7 @@ fun MonthlyBudgetScreen(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "Set category spending limits & track usage",
+                    text = "Set limits at Expense Group or Ledger level",
                     style = MaterialTheme.typography.labelSmall,
                     color = LedgerTextSecondary,
                     maxLines = 1,
@@ -316,8 +430,8 @@ fun MonthlyBudgetContent(
 
     var selectedYear by remember { mutableIntStateOf(currentYear) }
     var selectedMonth by remember { mutableIntStateOf(currentMonth) }
-    var expandedCategoryId by remember { mutableStateOf<String?>(null) }
-    var editingCategory by remember { mutableStateOf<Category?>(null) }
+    var expandedBudgetKey by remember { mutableStateOf<String?>(null) }
+    var editingTarget by remember { mutableStateOf<BudgetTarget?>(null) }
 
     val isCurrentMonth = selectedYear == currentYear && selectedMonth == currentMonth
     val monthLabel = remember(selectedYear, selectedMonth) {
@@ -352,6 +466,10 @@ fun MonthlyBudgetContent(
         modifier = modifier
             .fillMaxSize()
             .background(LedgerBackground)
+            .horizontalPeriodSwipe(
+                onSwipeNext = { shiftMonth(1) },
+                onSwipePrevious = { shiftMonth(-1) }
+            )
     ) {
         // Month Selector Strip
         Row(
@@ -436,7 +554,9 @@ fun MonthlyBudgetContent(
                         symbol = symbol,
                         canQuickAdd = summary.unbudgetedItems.isNotEmpty(),
                         onQuickAdd = {
-                            editingCategory = summary.unbudgetedItems.firstOrNull()?.category
+                            summary.unbudgetedItems.firstOrNull()?.let { first ->
+                                editingTarget = BudgetTarget(category = first.category, subcategory = null)
+                            }
                         },
                         modifier = Modifier.fillMaxWidth().widthIn(max = 720.dp)
                     )
@@ -452,7 +572,7 @@ fun MonthlyBudgetContent(
                 }
             }
 
-            // Budgeted Categories Section
+            // Active Budgets (Expense Group & Ledger Level)
             if (summary.budgetedItems.isNotEmpty()) {
                 item(key = "budgeted_section_header") {
                     Row(
@@ -464,7 +584,7 @@ fun MonthlyBudgetContent(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Category Budgets (${summary.budgetedItems.size})",
+                            text = "Active Budgets (${summary.budgetedItems.size})",
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.SemiBold,
                             color = LedgerTextSecondary
@@ -494,24 +614,29 @@ fun MonthlyBudgetContent(
                     }
                 }
 
-                items(summary.budgetedItems, key = { it.category.id }) { item ->
-                    val isExpanded = expandedCategoryId == item.category.id
+                items(summary.budgetedItems, key = { it.uniqueKey }) { item ->
+                    val isExpanded = expandedBudgetKey == item.uniqueKey
                     CategoryBudgetProgressCard(
                         item = item,
                         bundle = bundle,
                         symbol = symbol,
                         isExpanded = isExpanded,
                         onToggleExpand = {
-                            expandedCategoryId = if (isExpanded) null else item.category.id
+                            expandedBudgetKey = if (isExpanded) null else item.uniqueKey
                         },
-                        onEditLimit = { editingCategory = item.category },
+                        onEditLimit = {
+                            editingTarget = BudgetTarget(
+                                category = item.category,
+                                subcategory = item.normalizedSubcategory
+                            )
+                        },
                         onEditTransaction = onEditTransaction,
                         modifier = Modifier.fillMaxWidth().widthIn(max = 720.dp)
                     )
                 }
             }
 
-            // Unbudgeted Expense Categories Section
+            // Unbudgeted Expense Groups & Ledgers Section
             if (summary.unbudgetedItems.isNotEmpty()) {
                 item(key = "unbudgeted_section_header") {
                     Row(
@@ -524,16 +649,16 @@ fun MonthlyBudgetContent(
                     ) {
                         Text(
                             text = if (summary.budgetedItems.isEmpty()) {
-                                "Expense Categories"
+                                "Expense Groups & Ledgers"
                             } else {
-                                "Add Limits to Other Categories"
+                                "Set Limits (Group or Ledger)"
                             },
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.SemiBold,
                             color = LedgerTextSecondary
                         )
                         Text(
-                            text = "${summary.unbudgetedItems.size} available",
+                            text = "${summary.unbudgetedItems.size} groups",
                             style = MaterialTheme.typography.labelSmall,
                             color = LedgerTextMuted
                         )
@@ -553,12 +678,23 @@ fun MonthlyBudgetContent(
                                     item = unbudgeted,
                                     symbol = symbol,
                                     monthLabel = monthLabel,
-                                    onSetLimit = { editingCategory = unbudgeted.category }
+                                    onSetGroupLimit = {
+                                        editingTarget = BudgetTarget(
+                                            category = unbudgeted.category,
+                                            subcategory = null
+                                        )
+                                    },
+                                    onSetLedgerLimit = { ledgerName ->
+                                        editingTarget = BudgetTarget(
+                                            category = unbudgeted.category,
+                                            subcategory = ledgerName
+                                        )
+                                    }
                                 )
                                 if (index < summary.unbudgetedItems.lastIndex) {
                                     HorizontalDivider(
                                         color = LedgerDivider,
-                                        modifier = Modifier.padding(start = 52.dp)
+                                        modifier = Modifier.padding(start = 14.dp)
                                     )
                                 }
                             }
@@ -573,30 +709,47 @@ fun MonthlyBudgetContent(
         }
     }
 
-    // Set / Edit Monthly Budget Limit Dialog
-    editingCategory?.let { cat ->
-        val existingBudget = bundle.budgets.firstOrNull { it.categoryId == cat.id }
+    // Set / Edit Monthly Budget Limit Dialog (supports both Expense Group & Expense Ledger)
+    editingTarget?.let { target ->
+        val existingBudget = bundle.budgets.firstOrNull { b ->
+            b.categoryId == target.category.id &&
+                b.normalizedSubcategory().equals(target.normalizedSubcategory, ignoreCase = true)
+        }
         val spentThisMonth = summary.budgetedItems
-            .firstOrNull { it.category.id == cat.id }?.spent
-            ?: summary.unbudgetedItems.firstOrNull { it.category.id == cat.id }?.spent
-            ?: 0.0
+            .firstOrNull {
+                it.category.id == target.category.id &&
+                    it.normalizedSubcategory.equals(target.normalizedSubcategory, ignoreCase = true)
+            }?.spent
+            ?: if (target.isLedgerLevel) {
+                summary.unbudgetedItems
+                    .firstOrNull { it.category.id == target.category.id }
+                    ?.unbudgetedLedgers
+                    ?.firstOrNull { it.name.equals(target.normalizedSubcategory, ignoreCase = true) }
+                    ?.spent ?: 0.0
+            } else {
+                summary.unbudgetedItems.firstOrNull { it.category.id == target.category.id }?.spent ?: 0.0
+            }
 
         SetBudgetLimitDialog(
-            category = cat,
+            target = target,
             existingBudget = existingBudget,
             spentThisMonth = spentThisMonth,
             monthLabel = monthLabel,
             symbol = symbol,
-            onDismiss = { editingCategory = null },
+            onDismiss = { editingTarget = null },
             onSave = { newLimit ->
-                viewModel.saveBudget(cat.id, newLimit)
-                editingCategory = null
+                viewModel.saveBudget(
+                    categoryId = target.category.id,
+                    monthlyLimit = newLimit,
+                    subcategory = target.normalizedSubcategory
+                )
+                editingTarget = null
             },
             onRemove = {
                 if (existingBudget != null) {
                     viewModel.deleteBudget(existingBudget.id)
                 }
-                editingCategory = null
+                editingTarget = null
             }
         )
     }
@@ -659,7 +812,7 @@ private fun EmptyBudgetHeroCard(
             }
             Spacer(modifier = Modifier.height(10.dp))
             Text(
-                text = "Set monthly limits for your expense categories to monitor progress bars and spot overspending early.",
+                text = "Set monthly limits for entire Expense Groups or individual Expense Ledgers to track usage and catch overspending early.",
                 style = MaterialTheme.typography.bodySmall,
                 color = LedgerTextSecondary
             )
@@ -701,7 +854,7 @@ private fun OverallBudgetHeroCard(
     val targetColor = budgetStatusColor(summary.overallRatio, summary.isOverBudget)
     val statusColor by animateColorAsState(
         targetValue = targetColor,
-        animationSpec = LedgerMotion.microTween(120),
+        animationSpec = LedgerMotion.microTween(110),
         label = "overall_budget_color"
     )
     val animatedProgress by animateFloatAsState(
@@ -860,13 +1013,13 @@ private fun CategoryBudgetProgressCard(
     val categoryDotColor = LedgerFormatters.parseColorHex(item.category.colorHex)
     val barColor by animateColorAsState(
         targetValue = budgetStatusColor(item.ratio, item.isOverBudget),
-        animationSpec = LedgerMotion.microTween(120),
-        label = "cat_budget_color_${item.category.id}"
+        animationSpec = LedgerMotion.microTween(110),
+        label = "cat_budget_color_${item.uniqueKey}"
     )
     val animatedProgress by animateFloatAsState(
         targetValue = item.ratio.coerceIn(0f, 1f),
         animationSpec = LedgerMotion.smoothSpring(),
-        label = "cat_budget_progress_${item.category.id}"
+        label = "cat_budget_progress_${item.uniqueKey}"
     )
 
     Surface(
@@ -876,7 +1029,7 @@ private fun CategoryBudgetProgressCard(
             width = 1.dp,
             color = if (item.isOverBudget) LedgerCoral.copy(alpha = 0.45f) else LedgerDivider
         ),
-        modifier = modifier.testTag("budget_category_card_${item.category.id}")
+        modifier = modifier.testTag("budget_category_card_${item.uniqueKey}")
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Column(
@@ -896,15 +1049,44 @@ private fun CategoryBudgetProgressCard(
                             .background(categoryDotColor)
                     )
                     Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = item.category.name,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = LedgerTextPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).padding(end = 8.dp)
-                    )
+                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = item.displayTitle,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = LedgerTextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            val scopeColor = if (item.isLedgerLevel) LedgerAmber else LedgerBlue
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = scopeColor.copy(alpha = 0.14f)
+                            ) {
+                                Text(
+                                    text = if (item.isLedgerLevel) "Ledger" else "Group",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = scopeColor,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                        if (item.isLedgerLevel) {
+                            Text(
+                                text = item.category.name,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = LedgerTextMuted,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
                     Surface(
                         shape = RoundedCornerShape(10.dp),
                         color = barColor.copy(alpha = 0.15f)
@@ -929,7 +1111,7 @@ private fun CategoryBudgetProgressCard(
                         .fillMaxWidth()
                         .height(8.dp)
                         .clip(RoundedCornerShape(5.dp))
-                        .testTag("budget_progress_bar_${item.category.id}")
+                        .testTag("budget_progress_bar_${item.uniqueKey}")
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -974,7 +1156,7 @@ private fun CategoryBudgetProgressCard(
                 TextButton(
                     onClick = onEditLimit,
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                    modifier = Modifier.testTag("budget_edit_btn_${item.category.id}")
+                    modifier = Modifier.testTag("budget_edit_btn_${item.uniqueKey}")
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Edit,
@@ -994,7 +1176,7 @@ private fun CategoryBudgetProgressCard(
                     onClick = onToggleExpand,
                     enabled = item.transactions.isNotEmpty(),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                    modifier = Modifier.testTag("budget_entries_toggle_${item.category.id}")
+                    modifier = Modifier.testTag("budget_entries_toggle_${item.uniqueKey}")
                 ) {
                     Text(
                         text = if (item.transactions.isEmpty()) {
@@ -1017,7 +1199,7 @@ private fun CategoryBudgetProgressCard(
                 }
             }
 
-            // Expandable Category Entries List
+            // Expandable Entries List
             AnimatedVisibility(
                 visible = isExpanded && item.transactions.isNotEmpty(),
                 enter = LedgerMotion.expandEnter(),
@@ -1048,7 +1230,7 @@ private fun CategoryBudgetProgressCard(
                                         append(" • ")
                                         append(accName)
                                     }
-                                    if (!tx.subcategory.isNullOrBlank() && tx.note.isNotBlank()) {
+                                    if (!tx.subcategory.isNullOrBlank() && tx.note.isNotBlank() && !item.isLedgerLevel) {
                                         append(" • ")
                                         append(tx.subcategory)
                                     }
@@ -1076,82 +1258,144 @@ private fun CategoryBudgetProgressCard(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun UnbudgetedCategoryRow(
     item: UnbudgetedCategorySpend,
     symbol: String,
     monthLabel: String,
-    onSetLimit: () -> Unit
+    onSetGroupLimit: () -> Unit,
+    onSetLedgerLimit: (String) -> Unit
 ) {
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 58.dp)
-            .clickable(onClick = onSetLimit)
             .padding(horizontal = 14.dp, vertical = 10.dp)
-            .testTag("budget_set_limit_${item.category.id}"),
-        verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
+        Row(
             modifier = Modifier
-                .size(28.dp)
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(LedgerFormatters.parseColorHex(item.category.colorHex).copy(alpha = 0.18f)),
-            contentAlignment = Alignment.Center
+                .clickable(onClick = onSetGroupLimit)
+                .padding(vertical = 2.dp)
+                .testTag("budget_set_limit_${item.category.id}"),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .size(10.dp)
-                    .clip(CircleShape)
-                    .background(LedgerFormatters.parseColorHex(item.category.colorHex))
-            )
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-            Text(
-                text = item.category.name,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                color = LedgerTextPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = if (item.spent > 0.0) {
-                    "Spent ${LedgerFormatters.formatWholeAmount(item.spent, symbol)} in $monthLabel"
-                } else {
-                    "No expenses in $monthLabel"
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = if (item.spent > 0.0) LedgerCoral.copy(alpha = 0.85f) else LedgerTextMuted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-        Surface(
-            shape = RoundedCornerShape(8.dp),
-            color = LedgerSurfaceElevated,
-            border = BorderStroke(1.dp, LedgerBorder)
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .size(28.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(LedgerFormatters.parseColorHex(item.category.colorHex).copy(alpha = 0.18f)),
+                contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.Filled.Add,
-                    contentDescription = null,
-                    tint = LedgerCoral,
-                    modifier = Modifier.size(14.dp)
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(LedgerFormatters.parseColorHex(item.category.colorHex))
                 )
-                Spacer(modifier = Modifier.width(4.dp))
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                 Text(
-                    text = "Set Limit",
-                    style = MaterialTheme.typography.labelMedium,
+                    text = item.category.name,
+                    style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = LedgerTextPrimary,
                     maxLines = 1,
-                    softWrap = false
+                    overflow = TextOverflow.Ellipsis
                 )
+                Text(
+                    text = if (item.spent > 0.0) {
+                        "Spent ${LedgerFormatters.formatWholeAmount(item.spent, symbol)} in $monthLabel"
+                    } else {
+                        "No expenses in $monthLabel"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (item.spent > 0.0) LedgerCoral.copy(alpha = 0.85f) else LedgerTextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = if (item.isGroupBudgeted) LedgerBlue.copy(alpha = 0.12f) else LedgerSurfaceElevated,
+                border = BorderStroke(
+                    width = 1.dp,
+                    color = if (item.isGroupBudgeted) LedgerBlue.copy(alpha = 0.45f) else LedgerBorder
+                )
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (item.isGroupBudgeted) Icons.Filled.Check else Icons.Filled.Add,
+                        contentDescription = null,
+                        tint = if (item.isGroupBudgeted) LedgerBlue else LedgerCoral,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = if (item.isGroupBudgeted) "Group Set" else "Group Limit",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (item.isGroupBudgeted) LedgerBlue else LedgerTextPrimary,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+            }
+        }
+
+        if (item.unbudgetedLedgers.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            FlowRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 40.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                item.unbudgetedLedgers.forEach { ledger ->
+                    Surface(
+                        onClick = { onSetLedgerLimit(ledger.name) },
+                        shape = RoundedCornerShape(8.dp),
+                        color = LedgerSurfaceElevated,
+                        border = BorderStroke(1.dp, LedgerDivider),
+                        modifier = Modifier.testTag("budget_set_ledger_${item.category.id}_${ledger.name}")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Add,
+                                contentDescription = "Set limit for ${ledger.name}",
+                                tint = LedgerAmber,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = ledger.name,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = LedgerTextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (ledger.spent > 0.0) {
+                                Text(
+                                    text = LedgerFormatters.formatWholeAmount(ledger.spent, symbol),
+                                    style = TabularAmountStyle.copy(fontSize = 11.sp),
+                                    color = LedgerTextMuted,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1160,7 +1404,7 @@ private fun UnbudgetedCategoryRow(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SetBudgetLimitDialog(
-    category: Category,
+    target: BudgetTarget,
     existingBudget: Budget?,
     spentThisMonth: Double,
     monthLabel: String,
@@ -1169,7 +1413,7 @@ private fun SetBudgetLimitDialog(
     onSave: (Double) -> Unit,
     onRemove: () -> Unit
 ) {
-    var limitText by remember(category.id, existingBudget) {
+    var limitText by remember(target.uniqueKey, existingBudget) {
         val initial = existingBudget?.monthlyLimit?.takeIf { it > 0.0 }
         mutableStateOf(
             if (initial != null) {
@@ -1177,6 +1421,7 @@ private fun SetBudgetLimitDialog(
             } else ""
         )
     }
+    var showRemoveConfirm by remember { mutableStateOf(false) }
 
     val quickPresets = remember(spentThisMonth) {
         val base = mutableListOf<Long>()
@@ -1201,16 +1446,27 @@ private fun SetBudgetLimitDialog(
                     modifier = Modifier
                         .size(12.dp)
                         .clip(CircleShape)
-                        .background(LedgerFormatters.parseColorHex(category.colorHex))
+                        .background(LedgerFormatters.parseColorHex(target.category.colorHex))
                 )
                 Spacer(modifier = Modifier.width(10.dp))
-                Text(
-                    text = "${category.name} Budget",
-                    color = LedgerTextPrimary,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "${target.displayTitle} Budget",
+                        color = LedgerTextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = if (target.isLedgerLevel) {
+                            "Expense Ledger • ${target.category.name}"
+                        } else {
+                            "Expense Group"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = LedgerTextSecondary
+                    )
+                }
             }
         },
         text = {
@@ -1258,13 +1514,13 @@ private fun SetBudgetLimitDialog(
                 }
                 if (existingBudget != null) {
                     OutlinedButton(
-                        onClick = onRemove,
+                        onClick = { showRemoveConfirm = true },
                         shape = RoundedCornerShape(8.dp),
                         border = BorderStroke(1.dp, LedgerCoral.copy(alpha = 0.55f)),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = LedgerCoral),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(42.dp)
+                            .height(44.dp)
                             .testTag("budget_remove_button")
                     ) {
                         Icon(
@@ -1297,4 +1553,18 @@ private fun SetBudgetLimitDialog(
             }
         }
     )
+
+    if (showRemoveConfirm) {
+        ConfirmDestructiveDialog(
+            title = "Remove Budget Limit?",
+            message = "Remove the monthly spending limit for \"${target.displayTitle}\"?",
+            confirmLabel = "Remove",
+            confirmTestTag = "confirm_remove_budget_button",
+            onConfirm = {
+                showRemoveConfirm = false
+                onRemove()
+            },
+            onDismiss = { showRemoveConfirm = false }
+        )
+    }
 }

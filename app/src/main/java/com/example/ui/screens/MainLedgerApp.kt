@@ -72,6 +72,7 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -113,6 +114,7 @@ import com.example.data.LedgerTransaction
 import com.example.data.LocalLedgerDatabase
 import com.example.data.LocalRoomLedgerRepository
 import com.example.data.MainTab
+import com.example.data.RepeatFrequency
 import com.example.data.TransactionType
 import com.example.ui.theme.LedgerAmber
 import com.example.ui.theme.LedgerBackground
@@ -150,7 +152,8 @@ private sealed interface ActiveOverlay {
         val draftNonce: Long = 0L,
         val prefillType: TransactionType? = null,
         val prefillCategoryId: String? = null,
-        val prefillSubcategory: String? = null
+        val prefillSubcategory: String? = null,
+        val prefillRepeatFrequency: String? = null
     ) : ActiveOverlay
     data class AccountDetail(val accountId: String) : ActiveOverlay
     data class Configuration(val route: ConfigRoute) : ActiveOverlay
@@ -349,7 +352,8 @@ private fun LocalLedgerShell(
 
     LaunchedEffect(Unit) {
         viewModel.toastMessage.collect { msg ->
-            snackbarHostState.showSnackbar(msg)
+            snackbarHostState.currentSnackbarData?.dismiss()
+            snackbarHostState.showSnackbar(msg, duration = SnackbarDuration.Short)
         }
     }
 
@@ -466,6 +470,7 @@ private fun LocalLedgerShell(
                         prefillType = currentOverlay.prefillType,
                         prefillCategoryId = currentOverlay.prefillCategoryId,
                         prefillSubcategory = currentOverlay.prefillSubcategory,
+                        prefillRepeatFrequency = currentOverlay.prefillRepeatFrequency,
                         onBack = { overlay = ActiveOverlay.None },
                         onSave = { existingId, tx, keepOpen ->
                             viewModel.saveTransaction(existingId, tx) { ok ->
@@ -540,6 +545,12 @@ private fun LocalLedgerShell(
                         onBackToMain = { overlay = ActiveOverlay.None },
                         onEditTransaction = { tx ->
                             overlay = ActiveOverlay.AddEditTx(tx)
+                        },
+                        onAddRecurringTransaction = {
+                            overlay = ActiveOverlay.AddEditTx(
+                                existing = null,
+                                prefillRepeatFrequency = RepeatFrequency.MONTHLY.name
+                            )
                         },
                         onMassUploadLedgers = {
                             ledgerUploadDialogBundle = bundle

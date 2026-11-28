@@ -31,18 +31,18 @@ object LedgerMotion {
     val SnappyDecelerate = CubicBezierEasing(0.18f, 0.0f, 0.0f, 1.0f)
     val QuickAccelerate = CubicBezierEasing(0.3f, 0.0f, 1.0f, 1.0f)
 
-    fun <T> microTween(durationMs: Int = 100): TweenSpec<T> =
+    fun <T> microTween(durationMs: Int = 90): TweenSpec<T> =
         tween(durationMillis = durationMs, easing = SnappyDecelerate)
 
-    fun <T> snappyTween(durationMs: Int = 135): TweenSpec<T> =
+    fun <T> snappyTween(durationMs: Int = 120): TweenSpec<T> =
         tween(durationMillis = durationMs, easing = SnappyDecelerate)
 
-    fun <T> chartTween(durationMs: Int = 260): TweenSpec<T> =
+    fun <T> chartTween(durationMs: Int = 220): TweenSpec<T> =
         tween(durationMillis = durationMs, easing = SnappyDecelerate)
 
     fun <T> smoothSpring(visibilityThreshold: T? = null): SpringSpec<T> = spring(
         dampingRatio = Spring.DampingRatioNoBouncy,
-        stiffness = Spring.StiffnessMedium,
+        stiffness = Spring.StiffnessMediumLow * 1.5f,
         visibilityThreshold = visibilityThreshold
     )
 
@@ -55,60 +55,74 @@ object LedgerMotion {
     fun tabSwitchTransform(forward: Boolean): ContentTransform {
         val dir = if (forward) 1 else -1
         return (slideInHorizontally(
-            animationSpec = tween<IntOffset>(125, easing = SnappyDecelerate),
-            initialOffsetX = { dir * (it / 24) }
+            animationSpec = tween<IntOffset>(115, easing = SnappyDecelerate),
+            initialOffsetX = { dir * (it / 26) }
+        ) + fadeIn(animationSpec = tween(100, easing = SnappyDecelerate)))
+            .togetherWith(
+                fadeOut(animationSpec = tween(70, easing = QuickAccelerate))
+            )
+    }
+
+    fun periodSwitchTransform(forward: Boolean): ContentTransform {
+        val dir = if (forward) 1 else -1
+        return (slideInHorizontally(
+            animationSpec = tween<IntOffset>(130, easing = SnappyDecelerate),
+            initialOffsetX = { dir * (it / 10) }
         ) + fadeIn(animationSpec = tween(110, easing = SnappyDecelerate)))
             .togetherWith(
-                fadeOut(animationSpec = tween(80, easing = QuickAccelerate))
+                slideOutHorizontally(
+                    animationSpec = tween<IntOffset>(105, easing = QuickAccelerate),
+                    targetOffsetX = { -dir * (it / 14) }
+                ) + fadeOut(animationSpec = tween(85, easing = QuickAccelerate))
             )
     }
 
     fun pushPopTransform(goingBack: Boolean): ContentTransform {
         val dir = if (goingBack) -1 else 1
         return (slideInHorizontally(
-            animationSpec = tween<IntOffset>(145, easing = SnappyDecelerate),
-            initialOffsetX = { dir * (it / 8) }
-        ) + fadeIn(animationSpec = tween(125, easing = SnappyDecelerate)))
+            animationSpec = tween<IntOffset>(135, easing = SnappyDecelerate),
+            initialOffsetX = { dir * (it / 10) }
+        ) + fadeIn(animationSpec = tween(115, easing = SnappyDecelerate)))
             .togetherWith(
                 slideOutHorizontally(
-                    animationSpec = tween<IntOffset>(115, easing = QuickAccelerate),
-                    targetOffsetX = { -dir * (it / 12) }
-                ) + fadeOut(animationSpec = tween(95, easing = QuickAccelerate))
+                    animationSpec = tween<IntOffset>(105, easing = QuickAccelerate),
+                    targetOffsetX = { -dir * (it / 14) }
+                ) + fadeOut(animationSpec = tween(85, easing = QuickAccelerate))
             )
     }
 
     fun overlayTransform(entering: Boolean, exiting: Boolean): ContentTransform = when {
         entering -> {
             (slideInVertically(
-                animationSpec = tween<IntOffset>(150, easing = SnappyDecelerate),
-                initialOffsetY = { it / 22 }
-            ) + fadeIn(animationSpec = tween(130, easing = SnappyDecelerate)))
-                .togetherWith(fadeOut(animationSpec = tween(90, easing = QuickAccelerate)))
+                animationSpec = tween<IntOffset>(135, easing = SnappyDecelerate),
+                initialOffsetY = { it / 26 }
+            ) + fadeIn(animationSpec = tween(115, easing = SnappyDecelerate)))
+                .togetherWith(fadeOut(animationSpec = tween(80, easing = QuickAccelerate)))
         }
         exiting -> {
-            fadeIn(animationSpec = tween(120, easing = SnappyDecelerate))
+            fadeIn(animationSpec = tween(105, easing = SnappyDecelerate))
                 .togetherWith(
                     slideOutVertically(
-                        animationSpec = tween<IntOffset>(120, easing = QuickAccelerate),
-                        targetOffsetY = { it / 22 }
-                    ) + fadeOut(animationSpec = tween(100, easing = QuickAccelerate))
+                        animationSpec = tween<IntOffset>(110, easing = QuickAccelerate),
+                        targetOffsetY = { it / 26 }
+                    ) + fadeOut(animationSpec = tween(90, easing = QuickAccelerate))
                 )
         }
         else -> {
-            fadeIn(animationSpec = tween(115, easing = SnappyDecelerate))
-                .togetherWith(fadeOut(animationSpec = tween(85, easing = QuickAccelerate)))
+            fadeIn(animationSpec = tween(105, easing = SnappyDecelerate))
+                .togetherWith(fadeOut(animationSpec = tween(75, easing = QuickAccelerate)))
         }
     }
 
     fun fastFadeTransform(): ContentTransform =
-        fadeIn(tween(115, easing = SnappyDecelerate)) togetherWith
-            fadeOut(tween(85, easing = QuickAccelerate))
+        fadeIn(tween(105, easing = SnappyDecelerate)) togetherWith
+            fadeOut(tween(75, easing = QuickAccelerate))
 
     fun expandEnter(): EnterTransition =
-        expandVertically(tween<IntSize>(135, easing = SnappyDecelerate)) +
-            fadeIn(tween(110, easing = SnappyDecelerate))
+        expandVertically(tween<IntSize>(120, easing = SnappyDecelerate)) +
+            fadeIn(tween(100, easing = SnappyDecelerate))
 
     fun shrinkExit(): ExitTransition =
-        shrinkVertically(tween<IntSize>(115, easing = QuickAccelerate)) +
-            fadeOut(tween(90, easing = QuickAccelerate))
+        shrinkVertically(tween<IntSize>(105, easing = QuickAccelerate)) +
+            fadeOut(tween(80, easing = QuickAccelerate))
 }

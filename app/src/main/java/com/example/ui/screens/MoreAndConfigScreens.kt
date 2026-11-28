@@ -103,6 +103,7 @@ import com.example.data.CategoryType
 import com.example.data.LedgerTransaction
 import com.example.data.MainAccountGroup
 import com.example.data.RepeatFrequency
+import com.example.ui.components.ConfirmDestructiveDialog
 import com.example.ui.theme.ChartColorHexes
 import com.example.ui.theme.LedgerAmber
 import com.example.ui.theme.LedgerBackground
@@ -447,6 +448,7 @@ fun ConfigurationHostScreen(
     onLockNow: () -> Unit = {},
     onBackToMain: () -> Unit,
     onEditTransaction: (LedgerTransaction) -> Unit,
+    onAddRecurringTransaction: () -> Unit = {},
     onMassUploadLedgers: () -> Unit,
     onCreateCategoryLedger: (CategoryType, String?) -> Unit,
     onPostEntryForCategoryLedger: (CategoryType, String, String) -> Unit
@@ -515,12 +517,14 @@ fun ConfigurationHostScreen(
             )
             ConfigRoute.TAG_SETTING -> TagSettingScreen(
                 bundle = bundle,
+                viewModel = viewModel,
                 onBack = { navigateUp() }
             )
             ConfigRoute.REPEAT_SETTING -> RepeatSettingScreen(
                 bundle = bundle,
                 onBack = { navigateUp() },
-                onEditTransaction = onEditTransaction
+                onEditTransaction = onEditTransaction,
+                onAddRecurringTransaction = onAddRecurringTransaction
             )
             ConfigRoute.APP_LOCK -> AppLockSettingsScreen(
                 isEnabled = appLockEnabled,
@@ -741,6 +745,10 @@ private fun AccountsSettingScreen(
     var editingAccount by remember { mutableStateOf<Account?>(null) }
     var showLedgerDialog by remember { mutableStateOf(false) }
 
+    var pendingArchiveMainGroup by remember { mutableStateOf<MainAccountGroup?>(null) }
+    var pendingArchiveSubGroup by remember { mutableStateOf<AccountGroup?>(null) }
+    var pendingArchiveLedger by remember { mutableStateOf<Account?>(null) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -867,7 +875,7 @@ private fun AccountsSettingScreen(
                             }
                             if (!isDefaultMain) {
                                 IconButton(
-                                    onClick = { viewModel.setMainGroupArchived(mg.id, true) },
+                                    onClick = { pendingArchiveMainGroup = mg },
                                     modifier = Modifier.size(40.dp).testTag("archive_main_group_${mg.id}")
                                 ) {
                                     Icon(
@@ -910,7 +918,7 @@ private fun AccountsSettingScreen(
                             item(key = "sub_${sub.id}") {
                                 val subChevronRot by animateFloatAsState(
                                     targetValue = if (isSubExpanded) 90f else 0f,
-                                    animationSpec = tween(160),
+                                    animationSpec = LedgerMotion.microTween(),
                                     label = "sub_chev_${sub.id}"
                                 )
                                 Column {
@@ -974,7 +982,7 @@ private fun AccountsSettingScreen(
                                             )
                                         }
                                         IconButton(
-                                            onClick = { viewModel.setAccountGroupArchived(sub.id, true) },
+                                            onClick = { pendingArchiveSubGroup = sub },
                                             modifier = Modifier.size(38.dp).testTag("archive_sub_group_${sub.id}")
                                         ) {
                                             Icon(
@@ -1057,7 +1065,7 @@ private fun AccountsSettingScreen(
                                                     modifier = Modifier.padding(end = 4.dp)
                                                 )
                                                 IconButton(
-                                                    onClick = { viewModel.setAccountArchived(accItem.account.id, true) },
+                                                    onClick = { pendingArchiveLedger = accItem.account },
                                                     modifier = Modifier.size(36.dp).testTag("archive_ledger_${accItem.account.id}")
                                                 ) {
                                                     Icon(
@@ -1082,6 +1090,48 @@ private fun AccountsSettingScreen(
                 }
             }
         }
+    }
+
+    pendingArchiveMainGroup?.let { mg ->
+        ConfirmDestructiveDialog(
+            title = "Archive Main Group?",
+            message = "Archive \"${mg.name}\"? You can restore it anytime from Deleted Accounts.",
+            confirmLabel = "Archive",
+            confirmTestTag = "confirm_archive_main_group_button",
+            onConfirm = {
+                viewModel.setMainGroupArchived(mg.id, true)
+                pendingArchiveMainGroup = null
+            },
+            onDismiss = { pendingArchiveMainGroup = null }
+        )
+    }
+
+    pendingArchiveSubGroup?.let { sub ->
+        ConfirmDestructiveDialog(
+            title = "Archive Sub Group?",
+            message = "Archive \"${sub.name}\"? You can restore it anytime from Deleted Accounts.",
+            confirmLabel = "Archive",
+            confirmTestTag = "confirm_archive_sub_group_button",
+            onConfirm = {
+                viewModel.setAccountGroupArchived(sub.id, true)
+                pendingArchiveSubGroup = null
+            },
+            onDismiss = { pendingArchiveSubGroup = null }
+        )
+    }
+
+    pendingArchiveLedger?.let { acc ->
+        ConfirmDestructiveDialog(
+            title = "Archive Ledger?",
+            message = "Archive \"${acc.name}\"? Its past transactions will stay intact and you can restore it from Deleted Accounts.",
+            confirmLabel = "Archive",
+            confirmTestTag = "confirm_archive_ledger_button",
+            onConfirm = {
+                viewModel.setAccountArchived(acc.id, true)
+                pendingArchiveLedger = null
+            },
+            onDismiss = { pendingArchiveLedger = null }
+        )
     }
 
     // + Button Chooser Dialog: Main Group | Sub Group | Ledger
@@ -1435,6 +1485,8 @@ private fun DeletedAccountsScreen(
     viewModel: LedgerViewModel,
     onBack: () -> Unit
 ) {
+    var pendingPermanentDelete by remember { mutableStateOf<Account?>(null) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1500,7 +1552,10 @@ private fun DeletedAccountsScreen(
                             IconButton(onClick = { viewModel.setAccountArchived(acc.id, false) }) {
                                 Icon(Icons.Filled.Restore, contentDescription = "Restore", tint = LedgerBlue)
                             }
-                            IconButton(onClick = { viewModel.deleteAccountPermanently(acc.id) }) {
+                            IconButton(
+                                onClick = { pendingPermanentDelete = acc },
+                                modifier = Modifier.testTag("perm_delete_acc_${acc.id}")
+                            ) {
                                 Icon(Icons.Filled.DeleteForever, contentDescription = "Delete permanently", tint = LedgerCoral)
                             }
                         }
@@ -1509,6 +1564,20 @@ private fun DeletedAccountsScreen(
                 }
             }
         }
+    }
+
+    pendingPermanentDelete?.let { target ->
+        ConfirmDestructiveDialog(
+            title = "Delete Permanently?",
+            message = "Permanently delete \"${target.name}\"? This cannot be undone.",
+            confirmLabel = "Delete Forever",
+            confirmTestTag = "confirm_perm_delete_account_button",
+            onConfirm = {
+                viewModel.deleteAccountPermanently(target.id)
+                pendingPermanentDelete = null
+            },
+            onDismiss = { pendingPermanentDelete = null }
+        )
     }
 }
 
@@ -1548,6 +1617,8 @@ private fun CategorySettingScreen(
     var collapsedCategoryIds by remember(categoryType) { mutableStateOf(setOf<String>()) }
     var editingCat by remember { mutableStateOf<Category?>(null) }
     var showDialog by remember { mutableStateOf(false) }
+    var pendingDeleteCategory by remember { mutableStateOf<Category?>(null) }
+    var pendingRemoveLedger by remember { mutableStateOf<Pair<Category, String>?>(null) }
 
     Column(
         modifier = Modifier
@@ -1620,7 +1691,7 @@ private fun CategorySettingScreen(
                 val isExpanded = cat.id !in collapsedCategoryIds
                 val chevronRotation by animateFloatAsState(
                     targetValue = if (isExpanded) 90f else 0f,
-                    animationSpec = tween(180),
+                    animationSpec = LedgerMotion.microTween(),
                     label = "cat_chevron_${cat.id}"
                 )
                 val ledgerCountLabel = when (cat.subcategories.size) {
@@ -1696,7 +1767,7 @@ private fun CategorySettingScreen(
                             )
                         }
                         IconButton(
-                            onClick = { viewModel.deleteCategory(cat.id) },
+                            onClick = { pendingDeleteCategory = cat },
                             modifier = Modifier.testTag("delete_category_${cat.id}")
                         ) {
                             Icon(
@@ -1711,8 +1782,8 @@ private fun CategorySettingScreen(
                     // Nested Expense / Income Ledgers under this Category
                     AnimatedVisibility(
                         visible = isExpanded,
-                        enter = expandVertically(tween(180)) + fadeIn(tween(150)),
-                        exit = shrinkVertically(tween(150)) + fadeOut(tween(110))
+                        enter = LedgerMotion.expandEnter(),
+                        exit = LedgerMotion.shrinkExit()
                     ) {
                         Column(modifier = Modifier.fillMaxWidth()) {
                             cat.subcategories.forEach { ledger ->
@@ -1790,7 +1861,7 @@ private fun CategorySettingScreen(
                                     }
                                     Spacer(modifier = Modifier.width(2.dp))
                                     IconButton(
-                                        onClick = { viewModel.removeCategoryLedger(cat, ledger) },
+                                        onClick = { pendingRemoveLedger = cat to ledger },
                                         modifier = Modifier
                                             .size(34.dp)
                                             .testTag("remove_ledger_${cat.id}_$ledger")
@@ -1839,6 +1910,34 @@ private fun CategorySettingScreen(
                 }
             }
         }
+    }
+
+    pendingDeleteCategory?.let { cat ->
+        ConfirmDestructiveDialog(
+            title = "Delete Category?",
+            message = "Delete \"${cat.name}\" and its ledger list? Existing transactions will remain intact.",
+            confirmLabel = "Delete",
+            confirmTestTag = "confirm_delete_category_button",
+            onConfirm = {
+                viewModel.deleteCategory(cat.id)
+                pendingDeleteCategory = null
+            },
+            onDismiss = { pendingDeleteCategory = null }
+        )
+    }
+
+    pendingRemoveLedger?.let { (cat, ledgerName) ->
+        ConfirmDestructiveDialog(
+            title = "Remove Ledger?",
+            message = "Remove \"$ledgerName\" from ${cat.name}?",
+            confirmLabel = "Remove",
+            confirmTestTag = "confirm_remove_category_ledger_button",
+            onConfirm = {
+                viewModel.removeCategoryLedger(cat, ledgerName)
+                pendingRemoveLedger = null
+            },
+            onDismiss = { pendingRemoveLedger = null }
+        )
     }
 
     if (showDialog) {
@@ -1927,6 +2026,7 @@ private fun CategorySettingScreen(
 @Composable
 private fun TagSettingScreen(
     bundle: LedgerDataBundle,
+    viewModel: LedgerViewModel,
     onBack: () -> Unit
 ) {
     val symbol = bundle.settings.mainCurrencySymbol
@@ -1938,6 +2038,8 @@ private fun TagSettingScreen(
             .entries
             .sortedByDescending { it.value.size }
     }
+
+    var renamingTag by remember { mutableStateOf<String?>(null) }
 
     Column(
         modifier = Modifier
@@ -1951,13 +2053,24 @@ private fun TagSettingScreen(
         if (tagStats.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
                 Text(
-                    text = "Tagging values you add to transactions will appear here.",
+                    text = "Tagging values you add to transactions will appear here. Tap any tag to rename it across all entries.",
                     color = LedgerTextMuted,
                     textAlign = TextAlign.Center
                 )
             }
         } else {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 24.dp)
+            ) {
+                item(key = "tag_rename_hint") {
+                    Text(
+                        text = "Tap any tagging below to rename it across all matching transactions.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = LedgerTextMuted,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                    )
+                }
                 items(tagStats, key = { it.key }) { (tag, txs) ->
                     val inc = txs.filter { it.txType() == com.example.data.TransactionType.INCOME }.sumOf { it.amount }
                     val exp = txs.filter { it.txType() == com.example.data.TransactionType.EXPENSE }.sumOf { it.amount }
@@ -1971,7 +2084,9 @@ private fun TagSettingScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(LedgerSurface)
-                            .padding(horizontal = 16.dp, vertical = 13.dp),
+                            .clickable { renamingTag = tag }
+                            .padding(start = 16.dp, end = 6.dp, top = 12.dp, bottom = 12.dp)
+                            .testTag("tag_setting_row_$tag"),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
@@ -2008,13 +2123,94 @@ private fun TagSettingScreen(
                             style = TabularAmountStyle.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
                             color = netColor,
                             maxLines = 1,
-                            softWrap = false
+                            softWrap = false,
+                            modifier = Modifier.padding(end = 4.dp)
                         )
+                        IconButton(
+                            onClick = { renamingTag = tag },
+                            modifier = Modifier.testTag("rename_tag_button_$tag")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Edit,
+                                contentDescription = "Rename $tag",
+                                tint = LedgerTextSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
                     HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
                 }
             }
         }
+    }
+
+    renamingTag?.let { oldTag ->
+        var newName by remember(oldTag) { mutableStateOf(oldTag) }
+        val trimmedNew = newName.trim()
+        val matchingCount = tagStats.firstOrNull { it.key == oldTag }?.value?.size ?: 0
+        val willMerge = trimmedNew.isNotEmpty() &&
+            !trimmedNew.equals(oldTag, ignoreCase = true) &&
+            tagStats.any { it.key.equals(trimmedNew, ignoreCase = true) }
+
+        AlertDialog(
+            onDismissRequest = { renamingTag = null },
+            containerColor = LedgerSurface,
+            title = {
+                Text(
+                    text = "Rename Tagging",
+                    color = LedgerTextPrimary,
+                    fontWeight = FontWeight.SemiBold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Update \"$oldTag\" across $matchingCount ${if (matchingCount == 1) "transaction" else "transactions"}.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = LedgerTextSecondary
+                    )
+                    OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it.take(60) },
+                        label = { Text("New Tagging Name") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("rename_tag_input")
+                    )
+                    if (willMerge) {
+                        Text(
+                            text = "\"$trimmedNew\" already exists — saving will merge both tags together.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = LedgerAmber
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (trimmedNew.isNotEmpty() && trimmedNew != oldTag) {
+                            viewModel.renameTagging(oldTag, trimmedNew)
+                        }
+                        renamingTag = null
+                    },
+                    enabled = trimmedNew.isNotEmpty() && trimmedNew != oldTag,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = LedgerCoral,
+                        contentColor = Color.White
+                    ),
+                    modifier = Modifier.testTag("rename_tag_save_button")
+                ) {
+                    Text("Rename", fontWeight = FontWeight.SemiBold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { renamingTag = null }) {
+                    Text("Cancel", color = LedgerTextSecondary)
+                }
+            }
+        )
     }
 }
 
@@ -2022,43 +2218,135 @@ private fun TagSettingScreen(
 private fun RepeatSettingScreen(
     bundle: LedgerDataBundle,
     onBack: () -> Unit,
-    onEditTransaction: (LedgerTransaction) -> Unit
+    onEditTransaction: (LedgerTransaction) -> Unit,
+    onAddRecurringTransaction: () -> Unit
 ) {
     val repeating = remember(bundle.transactions) {
         bundle.transactions.filter { it.repeat() != RepeatFrequency.NONE }
     }
     val symbol = bundle.settings.mainCurrencySymbol
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(LedgerBackground)
             .statusBarsPadding()
             .navigationBarsPadding()
     ) {
-        ConfigTopBar(title = "Repeat Setting", onBack = onBack)
-        if (repeating.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-                Text("No recurring transactions configured yet. Tap Rep/Inst. while adding a transaction.", color = LedgerTextMuted, textAlign = TextAlign.Center)
-            }
-        } else {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(repeating, key = { it.id }) { tx ->
-                    Column {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(LedgerSurfaceElevated)
-                                .padding(horizontal = 14.dp, vertical = 5.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(tx.repeatLabel(), style = MaterialTheme.typography.labelSmall, color = LedgerCoral)
-                            Text(LedgerFormatters.formatShortDate(tx.epochDay), style = MaterialTheme.typography.labelSmall, color = LedgerTextMuted)
-                        }
-                        TransactionRowItem(tx = tx, bundle = bundle, symbol = symbol, onClick = { onEditTransaction(tx) })
-                        HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+        Column(modifier = Modifier.fillMaxSize()) {
+            ConfigTopBar(
+                title = "Repeat Setting",
+                onBack = onBack,
+                trailing = {
+                    IconButton(
+                        onClick = onAddRecurringTransaction,
+                        modifier = Modifier.testTag("repeat_add_entry_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Add,
+                            contentDescription = "Create recurring entry",
+                            tint = LedgerCoral
+                        )
                     }
                 }
+            )
+            if (repeating.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize().padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Text(
+                            text = "No recurring transactions configured yet.",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = LedgerTextPrimary,
+                            textAlign = TextAlign.Center
+                        )
+                        Text(
+                            text = "Create a recurring entry directly here, or tap Rep/Inst. when adding any transaction.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = LedgerTextMuted,
+                            textAlign = TextAlign.Center
+                        )
+                        Button(
+                            onClick = onAddRecurringTransaction,
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = LedgerCoral,
+                                contentColor = Color.White
+                            ),
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("repeat_empty_create_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Add,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Create Recurring Entry", fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 84.dp)
+                ) {
+                    items(repeating, key = { it.id }) { tx ->
+                        Column {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(LedgerSurfaceElevated)
+                                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = tx.repeatLabel(),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = LedgerCoral
+                                )
+                                Text(
+                                    text = LedgerFormatters.formatShortDate(tx.epochDay),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = LedgerTextMuted
+                                )
+                            }
+                            TransactionRowItem(
+                                tx = tx,
+                                bundle = bundle,
+                                symbol = symbol,
+                                onClick = { onEditTransaction(tx) }
+                            )
+                            HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                        }
+                    }
+                }
+            }
+        }
+
+        if (repeating.isNotEmpty()) {
+            androidx.compose.material3.FloatingActionButton(
+                onClick = onAddRecurringTransaction,
+                containerColor = LedgerCoral,
+                contentColor = Color.White,
+                shape = CircleShape,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(18.dp)
+                    .testTag("repeat_fab_add_entry")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Add,
+                    contentDescription = "Create recurring entry"
+                )
             }
         }
     }

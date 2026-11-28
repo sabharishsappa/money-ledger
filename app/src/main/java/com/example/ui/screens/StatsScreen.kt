@@ -73,6 +73,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.LedgerTransaction
+import com.example.ui.components.horizontalPeriodSwipe
 import com.example.ui.theme.LedgerMotion
 import com.example.data.StatsPeriodType
 import com.example.ui.theme.LedgerBackground
@@ -237,10 +238,14 @@ fun StatsScreen(
 
         AnimatedContent(
             targetState = slices.isEmpty() to filter.statsIsExpenseTab,
-            transitionSpec = {
-                fadeIn(tween(180)).togetherWith(fadeOut(tween(130)))
-            },
-            modifier = Modifier.weight(1f).fillMaxWidth(),
+            transitionSpec = { LedgerMotion.fastFadeTransform() },
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .horizontalPeriodSwipe(
+                    onSwipeNext = { viewModel.nextStatsPeriod() },
+                    onSwipePrevious = { viewModel.previousStatsPeriod() }
+                ),
             label = "stats_body_transition"
         ) { (isEmpty, isExpense) ->
             if (isEmpty) {

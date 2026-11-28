@@ -70,6 +70,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -107,6 +108,7 @@ import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import com.example.data.Category
 import com.example.data.CategoryType
+import com.example.data.CustomRepeatUnit
 import com.example.data.LedgerTransaction
 import com.example.data.RepeatFrequency
 import com.example.data.TransactionType
@@ -169,6 +171,7 @@ fun AddEditTransactionScreen(
     prefillType: TransactionType? = null,
     prefillCategoryId: String? = null,
     prefillSubcategory: String? = null,
+    prefillRepeatFrequency: String? = null,
     onBack: () -> Unit,
     onSave: (existingId: String?, tx: LedgerTransaction, keepOpen: Boolean) -> Unit,
     onCopy: ((LedgerTransaction) -> Unit)? = null,
@@ -261,12 +264,24 @@ fun AddEditTransactionScreen(
     var toTaggingText by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.effectiveToTagging().orEmpty()) }
     var descriptionText by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.description.orEmpty()) }
     var favorite by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.favorite ?: false) }
-    var repeatFreq by remember(existing, draft, draftKey) { mutableStateOf(seedTx?.repeat() ?: RepeatFrequency.NONE) }
-    var repeatDayOfMonth by remember(existing, draft, draftKey) {
-        val defaultDay = seedTx?.repeatDayOfMonth()
+    var repeatFreq by remember(existing, draft, draftKey, prefillRepeatFrequency) {
+        val raw = seedTx?.repeatFrequency ?: prefillRepeatFrequency
+        mutableStateOf(RepeatFrequency.safeValueOf(raw))
+    }
+    var repeatDayOfMonth by remember(existing, draft, draftKey, prefillRepeatFrequency) {
+        val raw = seedTx?.repeatFrequency ?: prefillRepeatFrequency
+        val defaultDay = RepeatFrequency.parseDayOfMonth(raw)
             ?: LedgerFormatters.epochDayToCalendar(seedTx?.epochDay ?: LedgerFormatters.todayEpochDay())
                 .get(java.util.Calendar.DAY_OF_MONTH)
         mutableStateOf(defaultDay.coerceIn(1, 31))
+    }
+    var repeatCustomCount by remember(existing, draft, draftKey, prefillRepeatFrequency) {
+        val raw = seedTx?.repeatFrequency ?: prefillRepeatFrequency
+        mutableStateOf(RepeatFrequency.parseCustomRepeat(raw)?.first ?: 2)
+    }
+    var repeatCustomUnit by remember(existing, draft, draftKey, prefillRepeatFrequency) {
+        val raw = seedTx?.repeatFrequency ?: prefillRepeatFrequency
+        mutableStateOf(RepeatFrequency.parseCustomRepeat(raw)?.second ?: CustomRepeatUnit.WEEKS)
     }
 
     var activePicker by remember(existing, draft, draftKey) { mutableStateOf(ActivePicker.NONE) }
@@ -319,7 +334,7 @@ fun AddEditTransactionScreen(
     }
     val accentColor by animateColorAsState(
         targetValue = targetAccentColor,
-        animationSpec = tween(200),
+        animationSpec = LedgerMotion.snappyTween(),
         label = "tx_accent_color"
     )
 
@@ -635,7 +650,12 @@ fun AddEditTransactionScreen(
             description = descriptionText.trim().takeIf { it.isNotBlank() },
             tags = emptyList(),
             favorite = favorite,
-            repeatFrequency = RepeatFrequency.encode(repeatFreq, repeatDayOfMonth)
+            repeatFrequency = RepeatFrequency.encode(
+                freq = repeatFreq,
+                dayOfMonth = repeatDayOfMonth,
+                customCount = repeatCustomCount,
+                customUnit = repeatCustomUnit
+            )
         )
     }
 
@@ -901,7 +921,12 @@ fun AddEditTransactionScreen(
                             tint = if (repeatFreq != RepeatFrequency.NONE) accentColor else LedgerTextSecondary,
                             modifier = Modifier.size(16.dp)
                         )
-                        val encodedRepeat = RepeatFrequency.encode(repeatFreq, repeatDayOfMonth)
+                        val encodedRepeat = RepeatFrequency.encode(
+                            freq = repeatFreq,
+                            dayOfMonth = repeatDayOfMonth,
+                            customCount = repeatCustomCount,
+                            customUnit = repeatCustomUnit
+                        )
                         Text(
                             text = RepeatFrequency.formatCompactLabel(encodedRepeat),
                             style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
@@ -2418,6 +2443,21 @@ fun AddEditTransactionScreen(
                 if (repeatFreq == RepeatFrequency.SPECIFIC_DATE_OF_MONTH) repeatDayOfMonth else fallbackDay
             )
         }
+        var draftCustomCountText by remember(showRepeatDialog) {
+            mutableStateOf(repeatCustomCount.coerceIn(1, 365).toString())
+        }
+        var draftCustomUnit by remember(showRepeatDialog) {
+            mutableStateOf(repeatCustomUnit)
+        }
+        val parsedCustomCount = draftCustomCountText.trim().toIntOrNull()?.coerceIn(1, 365) ?: 0
+        val customPreviewLabel = if (parsedCustomCount > 0) {
+            val unitWord = if (parsedCustomCount == 1) draftCustomUnit.singular else draftCustomUnit.label
+            "Every $parsedCustomCount $unitWord"
+        } else {
+            "Enter a number (1–365)"
+        }
+        val needsExplicitConfirm = draftFreq == RepeatFrequency.SPECIFIC_DATE_OF_MONTH ||
+            draftFreq == RepeatFrequency.CUSTOM
 
         AlertDialog(
             onDismissRequest = { showRepeatDialog = false },
@@ -2443,7 +2483,7 @@ fun AddEditTransactionScreen(
                                 .background(if (isSelected) accentColor.copy(alpha = 0.12f) else Color.Transparent)
                                 .clickable {
                                     draftFreq = freq
-                                    if (freq != RepeatFrequency.SPECIFIC_DATE_OF_MONTH) {
+                                    if (freq != RepeatFrequency.SPECIFIC_DATE_OF_MONTH && freq != RepeatFrequency.CUSTOM) {
                                         repeatFreq = freq
                                         showRepeatDialog = false
                                     }
@@ -2461,10 +2501,12 @@ fun AddEditTransactionScreen(
                                     fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
                                 )
                                 Text(
-                                    text = if (freq == RepeatFrequency.SPECIFIC_DATE_OF_MONTH && isSelected) {
-                                        "Repeats on the ${RepeatFrequency.ordinalDay(draftDay)} of every month"
-                                    } else {
-                                        freq.description
+                                    text = when {
+                                        freq == RepeatFrequency.SPECIFIC_DATE_OF_MONTH && isSelected ->
+                                            "Repeats on the ${RepeatFrequency.ordinalDay(draftDay)} of every month"
+                                        freq == RepeatFrequency.CUSTOM && isSelected ->
+                                            if (parsedCustomCount > 0) "Repeats $customPreviewLabel" else freq.description
+                                        else -> freq.description
                                     },
                                     style = MaterialTheme.typography.labelSmall,
                                     color = LedgerTextMuted
@@ -2539,33 +2581,191 @@ fun AddEditTransactionScreen(
                             }
                         }
 
+                        // Inline Custom Interval selector (Number + Days/Weeks/Months/Years)
+                        if (freq == RepeatFrequency.CUSTOM && isSelected) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = LedgerSurfaceElevated,
+                                border = BorderStroke(1.dp, accentColor.copy(alpha = 0.45f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp, vertical = 8.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Text(
+                                        text = "Repeat Every",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = LedgerTextPrimary,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Surface(
+                                            onClick = {
+                                                val next = ((parsedCustomCount.takeIf { it > 0 } ?: 1) - 1).coerceAtLeast(1)
+                                                draftCustomCountText = next.toString()
+                                            },
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = LedgerSurface,
+                                            border = BorderStroke(1.dp, LedgerBorder),
+                                            modifier = Modifier
+                                                .size(44.dp)
+                                                .testTag("repeat_custom_minus_button")
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Text(
+                                                    text = "−",
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    color = LedgerTextPrimary,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+                                        OutlinedTextField(
+                                            value = draftCustomCountText,
+                                            onValueChange = { raw ->
+                                                val digits = raw.filter { it.isDigit() }.take(3)
+                                                draftCustomCountText = digits
+                                            },
+                                            singleLine = true,
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                            placeholder = { Text("e.g. 2", color = LedgerTextMuted) },
+                                            textStyle = MaterialTheme.typography.titleMedium.copy(
+                                                color = LedgerTextPrimary,
+                                                fontWeight = FontWeight.SemiBold,
+                                                textAlign = TextAlign.Center
+                                            ),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("repeat_custom_number_input")
+                                        )
+                                        Surface(
+                                            onClick = {
+                                                val next = ((parsedCustomCount.takeIf { it > 0 } ?: 0) + 1).coerceAtMost(365)
+                                                draftCustomCountText = next.toString()
+                                            },
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = LedgerSurface,
+                                            border = BorderStroke(1.dp, LedgerBorder),
+                                            modifier = Modifier
+                                                .size(44.dp)
+                                                .testTag("repeat_custom_plus_button")
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Text(
+                                                    text = "+",
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    color = LedgerTextPrimary,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    Text(
+                                        text = "Unit",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = LedgerTextSecondary,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        CustomRepeatUnit.entries.forEach { unit ->
+                                            val unitSelected = draftCustomUnit == unit
+                                            Surface(
+                                                onClick = { draftCustomUnit = unit },
+                                                shape = RoundedCornerShape(8.dp),
+                                                color = if (unitSelected) accentColor else LedgerSurface,
+                                                border = BorderStroke(
+                                                    1.dp,
+                                                    if (unitSelected) accentColor else LedgerBorder
+                                                ),
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .heightIn(min = 40.dp)
+                                                    .testTag("repeat_custom_unit_${unit.name.lowercase()}")
+                                            ) {
+                                                Box(
+                                                    contentAlignment = Alignment.Center,
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)
+                                                ) {
+                                                    Text(
+                                                        text = unit.label,
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        color = if (unitSelected) saveButtonTextColor else LedgerTextPrimary,
+                                                        fontWeight = if (unitSelected) FontWeight.Bold else FontWeight.Medium,
+                                                        maxLines = 1,
+                                                        softWrap = false
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
                     }
                 }
             },
             confirmButton = {
-                if (draftFreq == RepeatFrequency.SPECIFIC_DATE_OF_MONTH) {
-                    Button(
-                        onClick = {
-                            repeatFreq = RepeatFrequency.SPECIFIC_DATE_OF_MONTH
-                            repeatDayOfMonth = draftDay
-                            showRepeatDialog = false
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = accentColor,
-                            contentColor = saveButtonTextColor
-                        ),
-                        modifier = Modifier.testTag("repeat_apply_specific_day_button")
-                    ) {
-                        Text("Set ${RepeatFrequency.ordinalDay(draftDay)}", fontWeight = FontWeight.SemiBold)
+                when (draftFreq) {
+                    RepeatFrequency.SPECIFIC_DATE_OF_MONTH -> {
+                        Button(
+                            onClick = {
+                                repeatFreq = RepeatFrequency.SPECIFIC_DATE_OF_MONTH
+                                repeatDayOfMonth = draftDay
+                                showRepeatDialog = false
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = accentColor,
+                                contentColor = saveButtonTextColor
+                            ),
+                            modifier = Modifier.testTag("repeat_apply_specific_day_button")
+                        ) {
+                            Text("Set ${RepeatFrequency.ordinalDay(draftDay)}", fontWeight = FontWeight.SemiBold)
+                        }
                     }
-                } else {
-                    TextButton(onClick = { showRepeatDialog = false }) {
-                        Text("Close", color = LedgerTextSecondary)
+                    RepeatFrequency.CUSTOM -> {
+                        Button(
+                            onClick = {
+                                if (parsedCustomCount > 0) {
+                                    repeatFreq = RepeatFrequency.CUSTOM
+                                    repeatCustomCount = parsedCustomCount
+                                    repeatCustomUnit = draftCustomUnit
+                                    showRepeatDialog = false
+                                }
+                            },
+                            enabled = parsedCustomCount > 0,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = accentColor,
+                                contentColor = saveButtonTextColor
+                            ),
+                            modifier = Modifier.testTag("repeat_apply_custom_button")
+                        ) {
+                            Text(
+                                text = if (parsedCustomCount > 0) "Set $customPreviewLabel" else "Apply Custom",
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                    else -> {
+                        TextButton(onClick = { showRepeatDialog = false }) {
+                            Text("Close", color = LedgerTextSecondary)
+                        }
                     }
                 }
             },
-            dismissButton = if (draftFreq == RepeatFrequency.SPECIFIC_DATE_OF_MONTH) {
+            dismissButton = if (needsExplicitConfirm) {
                 {
                     TextButton(onClick = { showRepeatDialog = false }) {
                         Text("Cancel", color = LedgerTextSecondary)

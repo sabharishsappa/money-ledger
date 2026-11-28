@@ -89,6 +89,8 @@ import com.example.data.LedgerTransaction
 import com.example.data.RepeatFrequency
 import com.example.data.TransactionType
 import com.example.data.TransactionsSubTab
+import com.example.ui.components.ConfirmDestructiveDialog
+import com.example.ui.components.horizontalPeriodSwipe
 import com.example.ui.theme.LedgerAmber
 import com.example.ui.theme.LedgerBackground
 import com.example.ui.theme.LedgerBlue
@@ -139,6 +141,7 @@ fun TransactionsScreen(
     var showTagFilterRow by remember { mutableStateOf(false) }
     var editingNote by remember { mutableStateOf<FinanceNote?>(null) }
     var showNoteDialog by remember { mutableStateOf(false) }
+    var pendingDeleteNote by remember { mutableStateOf<FinanceNote?>(null) }
 
     Box(modifier = modifier.fillMaxSize().background(LedgerBackground)) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -379,13 +382,32 @@ fun TransactionsScreen(
                 }
             }
 
-            // Sub-tab Content
+            // Sub-tab Content (Swipe left/right changes view period)
             AnimatedContent(
                 targetState = filter.subTab,
                 transitionSpec = {
                     LedgerMotion.tabSwitchTransform(forward = targetState.ordinal >= initialState.ordinal)
                 },
-                modifier = Modifier.weight(1f).fillMaxWidth(),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .horizontalPeriodSwipe(
+                        enabled = filter.subTab != TransactionsSubTab.NOTE,
+                        onSwipeNext = {
+                            if (filter.subTab == TransactionsSubTab.MONTHLY) {
+                                viewModel.shiftYear(1)
+                            } else {
+                                viewModel.nextMonth()
+                            }
+                        },
+                        onSwipePrevious = {
+                            if (filter.subTab == TransactionsSubTab.MONTHLY) {
+                                viewModel.shiftYear(-1)
+                            } else {
+                                viewModel.previousMonth()
+                            }
+                        }
+                    ),
                 label = "tx_subtab_content"
             ) { currentSubTab ->
                 when (currentSubTab) {
@@ -446,7 +468,7 @@ fun TransactionsScreen(
                                 viewModel.saveNote(note.id, note.title, note.content, !note.pinned)
                             },
                             onDeleteNote = { note ->
-                                viewModel.deleteNote(note.id)
+                                pendingDeleteNote = note
                             }
                         )
                     }
@@ -489,6 +511,20 @@ fun TransactionsScreen(
                 viewModel.saveNote(editingNote?.id, title, content, pinned)
                 showNoteDialog = false
             }
+        )
+    }
+
+    pendingDeleteNote?.let { note ->
+        ConfirmDestructiveDialog(
+            title = "Delete Note?",
+            message = "Delete \"${note.title.ifBlank { "this note" }}\"? This cannot be undone.",
+            confirmLabel = "Delete",
+            confirmTestTag = "confirm_delete_note_button",
+            onConfirm = {
+                viewModel.deleteNote(note.id)
+                pendingDeleteNote = null
+            },
+            onDismiss = { pendingDeleteNote = null }
         )
     }
 }

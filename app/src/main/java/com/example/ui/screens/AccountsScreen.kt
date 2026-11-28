@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -41,12 +43,16 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.ShowChart
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -70,6 +76,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
@@ -83,13 +90,15 @@ import androidx.compose.ui.unit.sp
 import com.example.data.Account
 import com.example.data.AccountNature
 import com.example.data.LedgerTransaction
+import com.example.data.TransactionType
+import com.example.ui.components.ConfirmDestructiveDialog
 import com.example.ui.theme.LedgerAmber
 import com.example.ui.theme.LedgerBackground
 import com.example.ui.theme.LedgerBlue
 import com.example.ui.theme.LedgerBorder
 import com.example.ui.theme.LedgerCoral
-import com.example.ui.theme.LedgerMotion
 import com.example.ui.theme.LedgerDivider
+import com.example.ui.theme.LedgerMotion
 import com.example.ui.theme.LedgerSurface
 import com.example.ui.theme.LedgerSurfaceElevated
 import com.example.ui.theme.LedgerSurfaceHighlight
@@ -102,6 +111,7 @@ import com.example.util.LedgerFormatters
 import com.example.viewmodel.AccountWithBalance
 import com.example.viewmodel.LedgerDataBundle
 import com.example.viewmodel.LedgerViewModel
+import java.util.Calendar
 import kotlin.math.abs
 import kotlin.math.roundToLong
 
@@ -496,7 +506,7 @@ fun AccountsScreen(
                                     } else {
                                         val chevronRot by animateFloatAsState(
                                             targetValue = if (isNatureExpanded) 90f else 0f,
-                                            animationSpec = tween(180),
+                                            animationSpec = LedgerMotion.microTween(),
                                             label = "nature_chevron_${natureSection.id}"
                                         )
                                         Row(
@@ -593,7 +603,7 @@ fun AccountsScreen(
                                             } else {
                                                 val groupChevronRot by animateFloatAsState(
                                                     targetValue = if (isGroupExpanded) 90f else 0f,
-                                                    animationSpec = tween(180),
+                                                    animationSpec = LedgerMotion.microTween(),
                                                     label = "grp_chevron_${section.group.id}"
                                                 )
                                                 Row(
@@ -798,7 +808,7 @@ fun AccountsScreen(
                                         } else {
                                             val chevronRot by animateFloatAsState(
                                                 targetValue = if (isPnlExpanded) 90f else 0f,
-                                                animationSpec = tween(180),
+                                                animationSpec = LedgerMotion.microTween(),
                                                 label = "pnl_chevron_${pnlSection.id}"
                                             )
                                             Row(
@@ -900,7 +910,7 @@ fun AccountsScreen(
                                                 } else {
                                                     val catChevronRot by animateFloatAsState(
                                                         targetValue = if (isCatExpanded) 90f else 0f,
-                                                        animationSpec = tween(180),
+                                                        animationSpec = LedgerMotion.microTween(),
                                                         label = "pnl_cat_chev_$catKey"
                                                     )
                                                     Row(
@@ -1175,7 +1185,7 @@ private fun TagSplitDataRow(
     val isBoldAmounts = rowTier == AccountRowTier.NATURE_HEADER || rowTier == AccountRowTier.GRAND_TOTAL
     val chevronRot by animateFloatAsState(
         targetValue = if (isExpanded) 90f else 0f,
-        animationSpec = tween(180),
+        animationSpec = LedgerMotion.microTween(),
         label = "tag_row_chevron_$label"
     )
 
@@ -1369,6 +1379,22 @@ private fun AmountSplitCell(
     }
 }
 
+private data class AccountStatementEntry(
+    val tx: LedgerTransaction,
+    val signedDelta: Double,
+    val cumulativeBalance: Double,
+    val sideTag: String?,
+    val typeLabel: String,
+    val primaryTitle: String,
+    val secondarySubtitle: String?
+)
+
+private data class AccountStatementDateGroup(
+    val epochDay: Long,
+    val entries: List<AccountStatementEntry>
+)
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AccountDetailScreen(
     accountId: String,
@@ -1389,11 +1415,220 @@ fun AccountDetailScreen(
     val tagSplits = bundle.accountTagBalances[account.id].orEmpty()
     val untaggedBal = bundle.accountUntaggedBalances[account.id] ?: account.initialBalance
     val groupName = bundle.accountGroups.firstOrNull { it.id == account.groupId }?.name ?: "Account"
-    val accountTransactions = remember(bundle.transactions, account.id) {
+
+    val todayEpoch = remember { LedgerFormatters.todayEpochDay() }
+    val defaultRange = remember(todayEpoch) {
+        val cal = LedgerFormatters.epochDayToCalendar(todayEpoch)
+        val y = cal.get(Calendar.YEAR)
+        val m = cal.get(Calendar.MONTH)
+        LedgerFormatters.calendarToEpochDay(y, m, 1) to
+            LedgerFormatters.calendarToEpochDay(y, m, LedgerFormatters.daysInMonth(y, m))
+    }
+
+    var datePreset by remember { mutableStateOf(TagReportDatePreset.ALL) }
+    var customStartDay by remember { mutableStateOf(defaultRange.first) }
+    var customEndDay by remember { mutableStateOf(defaultRange.second) }
+    var selectedTagKeys by remember { mutableStateOf(emptySet<String>()) }
+    var sortLatestFirst by remember { mutableStateOf(true) }
+
+    var showEditDialog by remember { mutableStateOf(false) }
+    var showDateDialog by remember { mutableStateOf(false) }
+    var showTagDialog by remember { mutableStateOf(false) }
+    var showTagBreakdown by remember { mutableStateOf(false) }
+
+    val rawAccountTxs = remember(bundle.transactions, account.id) {
         bundle.transactions.filter { it.accountId == account.id || it.toAccountId == account.id }
     }
 
-    var showEditDialog by remember { mutableStateOf(false) }
+    // Determine available tags and counts specifically on this account's side of each transaction
+    val tagMeta = remember(rawAccountTxs, account.id) {
+        val canonicalByLower = linkedMapOf<String, String>()
+        val counts = mutableMapOf<String, Int>()
+        var hasUntagged = false
+        rawAccountTxs.forEach { tx ->
+            val tag = when {
+                tx.txType() == TransactionType.TRANSFER && tx.toAccountId == account.id && tx.accountId != account.id ->
+                    tx.effectiveToTagging()
+                else -> tx.effectiveTagging()
+            }
+            if (tag.isNullOrBlank()) {
+                hasUntagged = true
+                counts[UNTAGGED_KEY] = (counts[UNTAGGED_KEY] ?: 0) + 1
+            } else {
+                val lower = tag.lowercase()
+                canonicalByLower.putIfAbsent(lower, tag)
+                counts[lower] = (counts[lower] ?: 0) + 1
+            }
+        }
+        Triple(canonicalByLower.values.sortedBy { it.lowercase() }, hasUntagged, counts.toMap())
+    }
+    val availableTags = tagMeta.first
+    val hasUntaggedEntries = tagMeta.second
+    val entryCountsByKey = tagMeta.third
+
+    val dateBounds = remember(datePreset, customStartDay, customEndDay) {
+        resolveDatePresetBounds(datePreset, customStartDay, customEndDay)
+    }
+
+    // Build chronological running cumulative statement, then apply date filter and display ordering
+    val statementResult = remember(
+        rawAccountTxs,
+        account.id,
+        account.initialBalance,
+        selectedTagKeys,
+        dateBounds,
+        sortLatestFirst,
+        bundle.categories,
+        bundle.accounts
+    ) {
+        val chronological = rawAccountTxs.sortedWith(
+            compareBy<LedgerTransaction> { it.epochDay }
+                .thenBy { it.timestampMillis }
+                .thenBy { it.id }
+        )
+
+        val tagFiltered = if (selectedTagKeys.isEmpty()) {
+            chronological
+        } else {
+            chronological.filter { tx ->
+                val sideTag = when {
+                    tx.txType() == TransactionType.TRANSFER && tx.toAccountId == account.id && tx.accountId != account.id ->
+                        tx.effectiveToTagging()
+                    else -> tx.effectiveTagging()
+                }
+                if (sideTag.isNullOrBlank()) UNTAGGED_KEY in selectedTagKeys
+                else sideTag.lowercase() in selectedTagKeys
+            }
+        }
+
+        // Opening balance belongs to the full account (and untagged bucket)
+        var running = if (selectedTagKeys.isEmpty() || UNTAGGED_KEY in selectedTagKeys) {
+            account.initialBalance
+        } else {
+            0.0
+        }
+
+        val withCumulative = tagFiltered.map { tx ->
+            val type = tx.txType()
+            val signedDelta: Double
+            val sideTag: String?
+            val typeLabel: String
+            val counterpartText: String?
+
+            when (type) {
+                TransactionType.INCOME -> {
+                    signedDelta = tx.amount
+                    sideTag = tx.effectiveTagging()
+                    typeLabel = "Income"
+                    counterpartText = bundle.categories
+                        .firstOrNull { it.id == tx.categoryId }
+                        ?.name
+                        ?.takeIf { it.isNotBlank() && it != "Uncategorized" }
+                }
+                TransactionType.EXPENSE -> {
+                    signedDelta = -tx.amount
+                    sideTag = tx.effectiveTagging()
+                    typeLabel = "Expense"
+                    counterpartText = tx.subcategory?.takeIf { it.isNotBlank() }
+                        ?: bundle.categories
+                            .firstOrNull { it.id == tx.categoryId }
+                            ?.name
+                            ?.takeIf { it.isNotBlank() && it != "Uncategorized" }
+                }
+                TransactionType.TRANSFER -> {
+                    typeLabel = "Transfer"
+                    when {
+                        tx.accountId == account.id && tx.toAccountId == account.id -> {
+                            signedDelta = -tx.feeAmount
+                            sideTag = tx.effectiveTagging() ?: tx.effectiveToTagging()
+                            counterpartText = "Self Transfer"
+                        }
+                        tx.accountId == account.id -> {
+                            signedDelta = -(tx.amount + tx.feeAmount)
+                            sideTag = tx.effectiveTagging()
+                            val toName = bundle.accountName(tx.toAccountId)
+                            counterpartText = if (toName.isNotBlank()) "To $toName" else "Outgoing Transfer"
+                        }
+                        else -> {
+                            signedDelta = tx.amount
+                            sideTag = tx.effectiveToTagging()
+                            val fromName = bundle.accountName(tx.accountId)
+                            counterpartText = if (fromName.isNotBlank()) "From $fromName" else "Incoming Transfer"
+                        }
+                    }
+                }
+            }
+
+            running += signedDelta
+
+            val primaryTitle = tx.note.trim().ifBlank {
+                counterpartText ?: typeLabel
+            }
+            val secondarySubtitle = buildString {
+                append(typeLabel)
+                if (!counterpartText.isNullOrBlank() && !counterpartText.equals(primaryTitle, ignoreCase = true)) {
+                    append(" • ")
+                    append(counterpartText)
+                }
+                val note2 = tx.note2?.trim().orEmpty()
+                if (note2.isNotEmpty()) {
+                    append(" • ")
+                    append(note2)
+                }
+            }.takeIf { it.isNotBlank() }
+
+            AccountStatementEntry(
+                tx = tx,
+                signedDelta = signedDelta,
+                cumulativeBalance = running,
+                sideTag = sideTag,
+                typeLabel = typeLabel,
+                primaryTitle = primaryTitle,
+                secondarySubtitle = secondarySubtitle
+            )
+        }
+
+        val startDay = dateBounds.first
+        val endDay = dateBounds.second
+        val dateFiltered = withCumulative.filter { entry ->
+            (startDay == null || entry.tx.epochDay >= startDay) &&
+                (endDay == null || entry.tx.epochDay <= endDay)
+        }
+
+        val periodInflow = dateFiltered.filter { it.signedDelta > 0.0 }.sumOf { it.signedDelta }
+        val periodOutflow = dateFiltered.filter { it.signedDelta < 0.0 }.sumOf { abs(it.signedDelta) }
+        val closingCumulative = dateFiltered.lastOrNull()?.cumulativeBalance ?: running
+
+        val ordered = if (sortLatestFirst) dateFiltered.asReversed() else dateFiltered
+        val grouped = ordered
+            .groupBy { it.tx.epochDay }
+            .entries
+            .map { (day, list) -> AccountStatementDateGroup(epochDay = day, entries = list) }
+
+        QuadStatementMetrics(
+            groups = grouped,
+            filteredCount = dateFiltered.size,
+            periodInflow = periodInflow,
+            periodOutflow = periodOutflow,
+            closingCumulative = closingCumulative
+        )
+    }
+
+    val hasActiveFilters = datePreset != TagReportDatePreset.ALL || selectedTagKeys.isNotEmpty()
+    val datePillLabel = remember(datePreset, customStartDay, customEndDay) {
+        formatDateChipLabel(datePreset, customStartDay, customEndDay)
+    }
+    val tagPillLabel = remember(selectedTagKeys, availableTags) {
+        when {
+            selectedTagKeys.isEmpty() -> "All Tags"
+            selectedTagKeys.size == 1 -> {
+                val only = selectedTagKeys.first()
+                if (only == UNTAGGED_KEY) "Untagged"
+                else availableTags.firstOrNull { it.equals(only, ignoreCase = true) } ?: only
+            }
+            else -> "${selectedTagKeys.size} Tags"
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -1402,53 +1637,80 @@ fun AccountDetailScreen(
             .statusBarsPadding()
             .navigationBarsPadding()
     ) {
+        // Top Header Bar (Delete removed from top bar — moved inside Edit Account dialog)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(LedgerSurface)
-                .padding(horizontal = 4.dp, vertical = 6.dp),
+                .padding(start = 4.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBack, modifier = Modifier.testTag("account_detail_back")) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = LedgerTextPrimary)
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier.testTag("account_detail_back")
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = LedgerTextPrimary
+                )
             }
-            Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
-                Text(account.name, style = MaterialTheme.typography.titleMedium, color = LedgerTextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(groupName, style = MaterialTheme.typography.labelSmall, color = LedgerTextSecondary)
-            }
-            IconButton(onClick = { showEditDialog = true }, modifier = Modifier.testTag("account_detail_edit")) {
-                Icon(Icons.Filled.Edit, contentDescription = "Edit account", tint = LedgerTextPrimary)
+            Column(modifier = Modifier.weight(1f).padding(start = 4.dp, end = 8.dp)) {
+                Text(
+                    text = account.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = LedgerTextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = groupName,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = LedgerTextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
             IconButton(
-                onClick = {
-                    viewModel.setAccountArchived(account.id, true)
-                    onBack()
-                },
-                modifier = Modifier.testTag("account_detail_archive")
+                onClick = { showEditDialog = true },
+                modifier = Modifier.testTag("account_detail_edit")
             ) {
-                Icon(Icons.Filled.Archive, contentDescription = "Archive account", tint = LedgerCoral)
+                Icon(
+                    imageVector = Icons.Filled.Edit,
+                    contentDescription = "Edit account",
+                    tint = LedgerTextPrimary
+                )
             }
         }
+        HorizontalDivider(color = LedgerDivider)
 
+        // Balance Summary Card
         Surface(
             color = LedgerSurfaceElevated,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
             shape = RoundedCornerShape(14.dp),
             border = BorderStroke(1.dp, LedgerDivider)
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+            Column(modifier = Modifier.padding(14.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Total Balance", style = MaterialTheme.typography.bodySmall, color = LedgerTextSecondary)
+                    Text(
+                        text = if (hasActiveFilters) "Filtered Closing Balance" else "Current Balance",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = LedgerTextSecondary
+                    )
                     Surface(
                         shape = RoundedCornerShape(6.dp),
                         color = if (account.includeInNetWorth) LedgerBlue.copy(alpha = 0.16f) else LedgerSurfaceHighlight
                     ) {
                         Text(
-                            text = if (account.includeInNetWorth) "In Net Worth" else "Excluded from Net Worth",
+                            text = if (account.includeInNetWorth) "In Net Worth" else "Excl. Net Worth",
                             style = MaterialTheme.typography.labelSmall,
                             color = if (account.includeInNetWorth) LedgerBlue else LedgerTextMuted,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
@@ -1456,109 +1718,352 @@ fun AccountDetailScreen(
                     }
                 }
                 Spacer(modifier = Modifier.height(4.dp))
+                val heroBalance = if (hasActiveFilters) statementResult.closingCumulative else liveBalance
                 Text(
-                    text = LedgerFormatters.formatSignedWhole(liveBalance, symbol),
+                    text = LedgerFormatters.formatSignedWhole(heroBalance, symbol),
                     style = TabularAmountStyle.copy(fontSize = 26.sp, fontWeight = FontWeight.Bold),
-                    color = if (liveBalance.roundToLong() < 0L) LedgerCoral else LedgerBlue
+                    color = if (heroBalance.roundToLong() < 0L) LedgerCoral else LedgerBlue,
+                    maxLines = 1,
+                    softWrap = false,
+                    modifier = Modifier.testTag("account_detail_hero_balance")
                 )
-                Spacer(modifier = Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "Opening balance: ",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = LedgerTextMuted
+
+                Spacer(modifier = Modifier.height(10.dp))
+                HorizontalDivider(color = LedgerDivider.copy(alpha = 0.7f))
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Compact Inflow / Outflow / Opening Strip
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    AccountMetricMini(
+                        label = "Opening",
+                        value = LedgerFormatters.formatSignedWhole(account.initialBalance, symbol),
+                        valueColor = if (account.initialBalance.roundToLong() < 0L) LedgerCoral else LedgerTextPrimary,
+                        modifier = Modifier.weight(1f)
                     )
-                    Text(
-                        text = LedgerFormatters.formatSignedWhole(account.initialBalance, symbol),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (account.initialBalance.roundToLong() < 0L) LedgerCoral else LedgerTextMuted
+                    AccountMetricMini(
+                        label = "Inflow",
+                        value = "+${LedgerFormatters.formatWholeAmount(statementResult.periodInflow, symbol)}",
+                        valueColor = LedgerBlue,
+                        alignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.weight(1f)
                     )
-                    Text(
-                        text = "  •  ${accountTransactions.size} entries",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = LedgerTextMuted
+                    AccountMetricMini(
+                        label = "Outflow",
+                        value = "-${LedgerFormatters.formatWholeAmount(statementResult.periodOutflow, symbol)}",
+                        valueColor = LedgerCoral,
+                        alignment = Alignment.End,
+                        modifier = Modifier.weight(1f)
                     )
                 }
 
                 if (tagSplits.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    HorizontalDivider(color = LedgerDivider)
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text(
-                        text = "Balance Split by Tagging",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = LedgerTextSecondary
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    tagSplits.entries.sortedBy { it.key }.forEach { (tagName, tagBal) ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(tagName, style = MaterialTheme.typography.bodySmall, color = LedgerTextPrimary)
-                            Text(
-                                text = LedgerFormatters.formatSignedWhole(tagBal, symbol),
-                                style = TabularAmountStyle.copy(fontSize = 13.sp),
-                                color = if (tagBal.roundToLong() < 0L) LedgerCoral else LedgerBlue
-                            )
-                        }
-                    }
-                    if (untaggedBal.roundToLong() != 0L) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("Untagged", style = MaterialTheme.typography.bodySmall, color = LedgerTextMuted)
-                            Text(
-                                text = LedgerFormatters.formatSignedWhole(untaggedBal, symbol),
-                                style = TabularAmountStyle.copy(fontSize = 13.sp),
-                                color = if (untaggedBal.roundToLong() < 0L) LedgerCoral else LedgerBlue
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        Text(
-            text = "Statement History",
-            style = MaterialTheme.typography.titleSmall,
-            color = LedgerTextSecondary,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
-        )
-
-        if (accountTransactions.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-                Text(
-                    text = "No transactions recorded for this account yet.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = LedgerTextMuted
-                )
-            }
-        } else {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(accountTransactions, key = { it.id }) { tx ->
-                    Column {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { showTagBreakdown = !showTagBreakdown }
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text(
-                            text = LedgerFormatters.formatShortDate(tx.epochDay),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = LedgerTextMuted,
+                            text = "Tag Split (${tagSplits.size})",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = LedgerTextSecondary
+                        )
+                        val splitArrowRot by animateFloatAsState(
+                            targetValue = if (showTagBreakdown) 180f else 0f,
+                            animationSpec = LedgerMotion.microTween(),
+                            label = "account_tag_split_rot"
+                        )
+                        Icon(
+                            imageVector = Icons.Filled.KeyboardArrowDown,
+                            contentDescription = if (showTagBreakdown) "Hide tag split" else "Show tag split",
+                            tint = LedgerTextSecondary,
+                            modifier = Modifier.size(18.dp).rotate(splitArrowRot)
+                        )
+                    }
+                    AnimatedVisibility(
+                        visible = showTagBreakdown,
+                        enter = LedgerMotion.expandEnter(),
+                        exit = LedgerMotion.shrinkExit()
+                    ) {
+                        FlowRow(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(LedgerBackground)
-                                .padding(horizontal = 14.dp, vertical = 5.dp)
-                        )
-                        TransactionRowItem(
-                            tx = tx,
-                            bundle = bundle,
-                            symbol = symbol,
-                            onClick = { onEditTransaction(tx) }
-                        )
-                        HorizontalDivider(color = LedgerDivider, thickness = 0.5.dp)
+                                .padding(top = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            tagSplits.entries.sortedBy { it.key.lowercase() }.forEach { (tagName, tagBal) ->
+                                val key = tagName.lowercase()
+                                val selected = key in selectedTagKeys
+                                Surface(
+                                    onClick = {
+                                        selectedTagKeys = if (selected) selectedTagKeys - key else setOf(key)
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (selected) LedgerBlue.copy(alpha = 0.16f) else LedgerSurface,
+                                    border = BorderStroke(
+                                        width = 1.dp,
+                                        color = if (selected) LedgerBlue else LedgerDivider
+                                    )
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = tagName,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (selected) LedgerBlue else LedgerTextPrimary
+                                        )
+                                        Text(
+                                            text = LedgerFormatters.formatSignedWhole(tagBal, symbol),
+                                            style = TabularAmountStyle.copy(fontSize = 11.5.sp),
+                                            color = if (tagBal.roundToLong() < 0L) LedgerCoral else LedgerBlue
+                                        )
+                                    }
+                                }
+                            }
+                            if (untaggedBal.roundToLong() != 0L) {
+                                val selected = UNTAGGED_KEY in selectedTagKeys
+                                Surface(
+                                    onClick = {
+                                        selectedTagKeys = if (selected) selectedTagKeys - UNTAGGED_KEY else setOf(UNTAGGED_KEY)
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (selected) LedgerBlue.copy(alpha = 0.16f) else LedgerSurface,
+                                    border = BorderStroke(
+                                        width = 1.dp,
+                                        color = if (selected) LedgerBlue else LedgerDivider
+                                    )
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = "Untagged",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = LedgerTextMuted
+                                        )
+                                        Text(
+                                            text = LedgerFormatters.formatSignedWhole(untaggedBal, symbol),
+                                            style = TabularAmountStyle.copy(fontSize = 11.5.sp),
+                                            color = if (untaggedBal.roundToLong() < 0L) LedgerCoral else LedgerBlue
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
+
+        // Filter Bar: Date Range | Tagging | Sort | Reset
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 14.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            ReportFilterPill(
+                icon = Icons.Filled.DateRange,
+                label = datePillLabel,
+                active = datePreset != TagReportDatePreset.ALL,
+                accentColor = LedgerCoral,
+                showDropdownChevron = true,
+                onClick = { showDateDialog = true },
+                modifier = Modifier.testTag("account_detail_date_filter")
+            )
+            ReportFilterPill(
+                icon = Icons.Filled.Label,
+                label = tagPillLabel,
+                active = selectedTagKeys.isNotEmpty(),
+                accentColor = LedgerBlue,
+                showDropdownChevron = true,
+                onClick = { showTagDialog = true },
+                modifier = Modifier.testTag("account_detail_tag_filter")
+            )
+            ReportFilterPill(
+                icon = Icons.Filled.SwapVert,
+                label = if (sortLatestFirst) "Latest" else "Oldest",
+                active = false,
+                accentColor = LedgerTextSecondary,
+                showDropdownChevron = false,
+                onClick = { sortLatestFirst = !sortLatestFirst },
+                modifier = Modifier.testTag("account_detail_sort_toggle")
+            )
+            if (hasActiveFilters) {
+                Surface(
+                    onClick = {
+                        datePreset = TagReportDatePreset.ALL
+                        selectedTagKeys = emptySet()
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                    color = LedgerCoral.copy(alpha = 0.14f),
+                    border = BorderStroke(1.dp, LedgerCoral.copy(alpha = 0.5f)),
+                    modifier = Modifier
+                        .heightIn(min = 38.dp)
+                        .testTag("account_detail_reset_filters")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Reset filters",
+                            tint = LedgerCoral,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = "Reset",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = LedgerCoral
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        // Column Header Strip: Statement Details | Value | Cumulative
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(LedgerSurface)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Statement (${statementResult.filteredCount})",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = LedgerTextSecondary,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = "Value",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = LedgerTextSecondary,
+                textAlign = TextAlign.End,
+                modifier = Modifier.width(88.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "Cumulative",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = LedgerTextSecondary,
+                textAlign = TextAlign.End,
+                modifier = Modifier.width(94.dp)
+            )
+        }
+        HorizontalDivider(color = LedgerDivider)
+
+        // Date-Grouped Statement List with Prominent Date Headers + Running Cumulative Column
+        if (statementResult.groups.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = if (hasActiveFilters) {
+                            "No transactions match your filters."
+                        } else {
+                            "No transactions recorded for this account yet."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = LedgerTextMuted,
+                        textAlign = TextAlign.Center
+                    )
+                    if (hasActiveFilters) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        TextButton(
+                            onClick = {
+                                datePreset = TagReportDatePreset.ALL
+                                selectedTagKeys = emptySet()
+                            }
+                        ) {
+                            Text("Clear Filters", color = LedgerCoral, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 24.dp)
+            ) {
+                statementResult.groups.forEach { group ->
+                    item(key = "acc_date_${group.epochDay}", contentType = "acc_date_hdr") {
+                        AccountStatementDateHeader(
+                            epochDay = group.epochDay,
+                            entryCount = group.entries.size
+                        )
+                    }
+                    items(
+                        items = group.entries,
+                        key = { "acc_tx_${it.tx.id}" },
+                        contentType = { "acc_tx_row" }
+                    ) { entry ->
+                        AccountStatementTransactionRow(
+                            entry = entry,
+                            symbol = symbol,
+                            onClick = { onEditTransaction(entry.tx) }
+                        )
+                        HorizontalDivider(color = LedgerDivider.copy(alpha = 0.65f), thickness = 0.5.dp)
+                    }
+                }
+            }
+        }
+    }
+
+    if (showDateDialog) {
+        DateRangeFilterDialog(
+            currentPreset = datePreset,
+            currentCustomStart = customStartDay,
+            currentCustomEnd = customEndDay,
+            onDismiss = { showDateDialog = false },
+            onApply = { preset, start, end ->
+                datePreset = preset
+                customStartDay = start
+                customEndDay = end
+                showDateDialog = false
+            }
+        )
+    }
+
+    if (showTagDialog) {
+        TagMultiSelectFilterDialog(
+            availableTags = availableTags,
+            hasUntaggedEntries = hasUntaggedEntries,
+            entryCountsByKey = entryCountsByKey,
+            initialSelectedKeys = selectedTagKeys,
+            onDismiss = { showTagDialog = false },
+            onApply = { keys ->
+                selectedTagKeys = keys
+                showTagDialog = false
+            }
+        )
     }
 
     if (showEditDialog) {
@@ -1578,8 +2083,204 @@ fun AccountDetailScreen(
                     includeInNetWorth = includeInNetWorth
                 )
                 showEditDialog = false
+            },
+            onDelete = {
+                viewModel.setAccountArchived(account.id, true)
+                showEditDialog = false
+                onBack()
             }
         )
+    }
+}
+
+private data class QuadStatementMetrics(
+    val groups: List<AccountStatementDateGroup>,
+    val filteredCount: Int,
+    val periodInflow: Double,
+    val periodOutflow: Double,
+    val closingCumulative: Double
+)
+
+@Composable
+private fun AccountMetricMini(
+    label: String,
+    value: String,
+    valueColor: Color,
+    alignment: Alignment.Horizontal = Alignment.Start,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier, horizontalAlignment = alignment) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = LedgerTextMuted,
+            maxLines = 1
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = value,
+            style = TabularAmountStyle.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold),
+            color = valueColor,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun AccountStatementDateHeader(
+    epochDay: Long,
+    entryCount: Int
+) {
+    val dayOfMonth = remember(epochDay) { LedgerFormatters.dayOfMonthPadded(epochDay) }
+    val dayOfWeek = remember(epochDay) { LedgerFormatters.weekdayShort(epochDay) }
+    val monthYear = remember(epochDay) { LedgerFormatters.monthYearDot(epochDay) }
+    val isSunday = remember(epochDay) {
+        LedgerFormatters.dayOfWeekIndex(epochDay) == Calendar.SUNDAY
+    }
+
+    Column(modifier = Modifier.fillMaxWidth().background(LedgerBackground)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = dayOfMonth,
+                style = TabularAmountStyle.copy(fontSize = 21.sp, fontWeight = FontWeight.Bold),
+                color = LedgerTextPrimary
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Surface(
+                shape = RoundedCornerShape(5.dp),
+                color = if (isSunday) LedgerCoral else LedgerSurfaceHighlight
+            ) {
+                Text(
+                    text = dayOfWeek,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isSunday) Color.White else LedgerTextPrimary,
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = monthYear,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = LedgerTextSecondary,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = "$entryCount ${if (entryCount == 1) "entry" else "entries"}",
+                style = MaterialTheme.typography.labelSmall,
+                color = LedgerTextMuted
+            )
+        }
+        HorizontalDivider(color = LedgerDivider.copy(alpha = 0.8f), thickness = 0.6.dp)
+    }
+}
+
+@Composable
+private fun AccountStatementTransactionRow(
+    entry: AccountStatementEntry,
+    symbol: String,
+    onClick: () -> Unit
+) {
+    val valueRounded = entry.signedDelta.roundToLong()
+    val valueColor = when {
+        valueRounded > 0L -> LedgerBlue
+        valueRounded < 0L -> LedgerCoral
+        else -> LedgerTextSecondary
+    }
+    val cumRounded = entry.cumulativeBalance.roundToLong()
+    val cumColor = if (cumRounded < 0L) LedgerCoral else LedgerTextPrimary
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .background(LedgerSurface)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .testTag("account_stmt_row_${entry.tx.id}"),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = entry.primaryTitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = LedgerTextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (!entry.sideTag.isNullOrBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = LedgerSurfaceHighlight
+                    ) {
+                        Text(
+                            text = entry.sideTag,
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                            fontWeight = FontWeight.SemiBold,
+                            color = LedgerBlue,
+                            maxLines = 1,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+            }
+            if (!entry.secondarySubtitle.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = entry.secondarySubtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = LedgerTextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        // Value column
+        Text(
+            text = formatSignedLedgerAmount(entry.signedDelta, symbol, showPlus = true),
+            style = TabularAmountStyle.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold),
+            color = valueColor,
+            maxLines = 1,
+            softWrap = false,
+            textAlign = TextAlign.End,
+            modifier = Modifier.width(88.dp)
+        )
+
+        Spacer(modifier = Modifier.width(8.dp))
+
+        // Cumulative balance column
+        Surface(
+            shape = RoundedCornerShape(6.dp),
+            color = LedgerSurfaceElevated,
+            modifier = Modifier.width(94.dp)
+        ) {
+            Text(
+                text = LedgerFormatters.formatSignedWhole(entry.cumulativeBalance, symbol),
+                style = TabularAmountStyle.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Bold),
+                color = cumColor,
+                maxLines = 1,
+                softWrap = false,
+                textAlign = TextAlign.End,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 6.dp, vertical = 4.dp)
+            )
+        }
     }
 }
 
@@ -1595,7 +2296,8 @@ fun AccountEditorDialog(
         nature: AccountNature,
         note: String?,
         includeInNetWorth: Boolean
-    ) -> Unit
+    ) -> Unit,
+    onDelete: (() -> Unit)? = null
 ) {
     val activeGroups = bundle.activeGroups
     var selectedGroupId by remember(existing, activeGroups) {
@@ -1608,6 +2310,7 @@ fun AccountEditorDialog(
     var note by remember(existing) { mutableStateOf(existing?.note.orEmpty()) }
     var includeInNetWorth by remember(existing) { mutableStateOf(existing?.includeInNetWorth ?: true) }
     var groupMenuExpanded by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
 
     val selectedGroup = activeGroups.firstOrNull { it.id == selectedGroupId } ?: activeGroups.firstOrNull()
     val selectedGroupName = selectedGroup?.name ?: "Select Sub Group"
@@ -1779,6 +2482,28 @@ fun AccountEditorDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                if (existing != null && onDelete != null) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    OutlinedButton(
+                        onClick = { showDeleteConfirm = true },
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, LedgerCoral.copy(alpha = 0.6f)),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = LedgerCoral),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 44.dp)
+                            .testTag("account_edit_delete_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.DeleteOutline,
+                            contentDescription = null,
+                            modifier = Modifier.size(17.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Delete Account", fontWeight = FontWeight.SemiBold)
+                    }
+                }
             }
         },
         confirmButton = {
@@ -1809,4 +2534,18 @@ fun AccountEditorDialog(
             }
         }
     )
+
+    if (showDeleteConfirm && existing != null && onDelete != null) {
+        ConfirmDestructiveDialog(
+            title = "Delete Account?",
+            message = "Archive \"${existing.name}\"? Its past transactions will remain intact and you can restore it anytime from Deleted Accounts.",
+            confirmLabel = "Delete",
+            confirmTestTag = "confirm_delete_account_button",
+            onConfirm = {
+                showDeleteConfirm = false
+                onDelete()
+            },
+            onDismiss = { showDeleteConfirm = false }
+        )
+    }
 }

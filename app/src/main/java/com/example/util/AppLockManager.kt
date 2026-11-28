@@ -2,6 +2,7 @@ package com.example.util
 
 import android.content.Context
 import android.util.Base64
+import androidx.biometric.BiometricManager
 import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.SecretKeyFactory
@@ -13,9 +14,16 @@ sealed interface PinVerifyResult {
     data class LockedOut(val remainingSeconds: Long) : PinVerifyResult
 }
 
+enum class BiometricAvailability {
+    AVAILABLE,
+    NONE_ENROLLED,
+    UNAVAILABLE
+}
+
 object AppLockManager {
     private const val PREFS_NAME = "money_ledger_app_lock_prefs"
     private const val KEY_ENABLED = "pin_lock_enabled"
+    private const val KEY_BIOMETRIC_ENABLED = "biometric_unlock_enabled"
     private const val KEY_PIN_HASH = "pin_hash_b64"
     private const val KEY_PIN_SALT = "pin_salt_b64"
     private const val KEY_AUTO_LOCK_DELAY_SEC = "auto_lock_delay_sec"
@@ -40,6 +48,31 @@ object AppLockManager {
         return p.getBoolean(KEY_ENABLED, false) &&
             !p.getString(KEY_PIN_HASH, null).isNullOrBlank() &&
             !p.getString(KEY_PIN_SALT, null).isNullOrBlank()
+    }
+
+    fun biometricAvailability(context: Context): BiometricAvailability {
+        val manager = BiometricManager.from(context.applicationContext)
+        val authenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG or
+            BiometricManager.Authenticators.BIOMETRIC_WEAK
+        return when (manager.canAuthenticate(authenticators)) {
+            BiometricManager.BIOMETRIC_SUCCESS -> BiometricAvailability.AVAILABLE
+            BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> BiometricAvailability.NONE_ENROLLED
+            else -> BiometricAvailability.UNAVAILABLE
+        }
+    }
+
+    fun isBiometricEnabled(context: Context): Boolean =
+        isAppLockEnabled(context) &&
+            prefs(context).getBoolean(KEY_BIOMETRIC_ENABLED, false) &&
+            biometricAvailability(context) == BiometricAvailability.AVAILABLE
+
+    fun isBiometricPreferenceOn(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_BIOMETRIC_ENABLED, false)
+
+    fun setBiometricEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit()
+            .putBoolean(KEY_BIOMETRIC_ENABLED, enabled)
+            .apply()
     }
 
     fun autoLockDelaySeconds(context: Context): Int =

@@ -134,6 +134,7 @@ class LocalRoomLedgerRepository(
                     id = it.id,
                     userId = it.userId,
                     categoryId = it.categoryId,
+                    subcategory = it.subcategory,
                     monthlyLimit = it.monthlyLimit
                 )
             }
@@ -443,14 +444,38 @@ class LocalRoomLedgerRepository(
     override suspend fun deleteTransaction(userId: String, transactionId: String): Result<Unit> =
         runSafely { dao.deleteTransaction(userId, transactionId) }
 
-    override suspend fun saveBudget(userId: String, categoryId: String, monthlyLimit: Double): Result<Unit> {
+    override suspend fun renameTagging(userId: String, oldTag: String, newTag: String): Result<Int> {
+        val cleanOld = oldTag.trim()
+        val cleanNew = newTag.trim().take(60)
+        if (cleanOld.isEmpty() || cleanNew.isEmpty()) {
+            return Result.failure(IllegalArgumentException("Tagging name cannot be empty"))
+        }
+        return try {
+            val primaryCount = dao.renameTransactionTagging(userId, cleanOld, cleanNew)
+            val toCount = dao.renameTransactionToTagging(userId, cleanOld, cleanNew)
+            Result.success(primaryCount + toCount)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun saveBudget(
+        userId: String,
+        categoryId: String,
+        monthlyLimit: Double,
+        subcategory: String?
+    ): Result<Unit> {
         if (categoryId.isBlank()) return Result.failure(IllegalArgumentException("Category required"))
+        val cleanSub = subcategory?.trim()?.take(60)?.takeIf { it.isNotEmpty() }
         return runSafely {
             dao.upsertBudget(
                 LocalBudgetEntity(
-                    id = "budget_$categoryId",
+                    id = Budget.buildDocId(categoryId, cleanSub),
                     userId = userId,
                     categoryId = categoryId,
+                    subcategory = cleanSub,
                     monthlyLimit = monthlyLimit.coerceAtLeast(0.0)
                 )
             )

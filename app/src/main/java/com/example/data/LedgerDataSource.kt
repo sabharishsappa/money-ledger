@@ -81,8 +81,14 @@ interface LedgerDataSource {
     ): Result<Unit>
 
     suspend fun deleteTransaction(userId: String, transactionId: String): Result<Unit>
+    suspend fun renameTagging(userId: String, oldTag: String, newTag: String): Result<Int>
 
-    suspend fun saveBudget(userId: String, categoryId: String, monthlyLimit: Double): Result<Unit>
+    suspend fun saveBudget(
+        userId: String,
+        categoryId: String,
+        monthlyLimit: Double,
+        subcategory: String? = null
+    ): Result<Unit>
     suspend fun deleteBudget(userId: String, budgetId: String): Result<Unit>
 
     suspend fun saveNote(

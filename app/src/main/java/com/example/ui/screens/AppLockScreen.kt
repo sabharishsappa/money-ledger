@@ -1,14 +1,15 @@
 package com.example.ui.screens
 
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.activity.compose.BackHandler
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -39,6 +40,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Pin
@@ -77,6 +79,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
 import com.example.ui.theme.LedgerAmber
 import com.example.ui.theme.LedgerBackground
 import com.example.ui.theme.LedgerBlue
@@ -84,6 +88,7 @@ import com.example.ui.theme.LedgerBorder
 import com.example.ui.theme.LedgerCoral
 import com.example.ui.theme.LedgerDivider
 import com.example.ui.theme.LedgerGreen
+import com.example.ui.theme.LedgerMotion
 import com.example.ui.theme.LedgerSurface
 import com.example.ui.theme.LedgerSurfaceElevated
 import com.example.ui.theme.LedgerSurfaceHighlight
@@ -91,6 +96,7 @@ import com.example.ui.theme.LedgerTextMuted
 import com.example.ui.theme.LedgerTextPrimary
 import com.example.ui.theme.LedgerTextSecondary
 import com.example.util.AppLockManager
+import com.example.util.BiometricAvailability
 import com.example.util.PinVerifyResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -110,6 +116,58 @@ private enum class PinFlowStep {
     CONFIRM_NEW
 }
 
+private fun Context.findFragmentActivity(): FragmentActivity? {
+    var ctx: Context? = this
+    while (ctx is ContextWrapper) {
+        if (ctx is FragmentActivity) return ctx
+        ctx = ctx.baseContext
+    }
+    return ctx as? FragmentActivity
+}
+
+private fun launchSystemBiometricPrompt(
+    context: Context,
+    title: String = "Unlock Money Ledger",
+    subtitle: String = "Confirm your fingerprint or biometric to continue",
+    negativeButtonText: String = "Use PIN",
+    onAuthenticated: () -> Unit,
+    onError: (String) -> Unit = {}
+) {
+    val activity = context.findFragmentActivity()
+    if (activity == null) {
+        onError("Biometric prompt unavailable in current window")
+        return
+    }
+    val executor = ContextCompat.getMainExecutor(activity)
+    val callback = object : BiometricPrompt.AuthenticationCallback() {
+        override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+            super.onAuthenticationSucceeded(result)
+            onAuthenticated()
+        }
+
+        override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+            super.onAuthenticationError(errorCode, errString)
+            val isUserCancel = errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON ||
+                errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
+                errorCode == BiometricPrompt.ERROR_CANCELED
+            if (!isUserCancel && errString.isNotBlank()) {
+                onError(errString.toString())
+            }
+        }
+    }
+    val prompt = BiometricPrompt(activity, executor, callback)
+    val promptInfo = BiometricPrompt.PromptInfo.Builder()
+        .setTitle(title)
+        .setSubtitle(subtitle)
+        .setNegativeButtonText(negativeButtonText)
+        .setAllowedAuthenticators(
+            BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                BiometricManager.Authenticators.BIOMETRIC_WEAK
+        )
+        .build()
+    prompt.authenticate(promptInfo)
+}
+
 @Composable
 fun PinLockGateScreen(
     onUnlocked: () -> Unit,
@@ -121,11 +179,38 @@ fun PinLockGateScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
+    val biometricEnabled = remember { AppLockManager.isBiometricEnabled(context) }
     var enteredPin by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isVerifying by remember { mutableStateOf(false) }
     var lockoutSeconds by remember { mutableLongStateOf(AppLockManager.remainingLockoutSeconds(context)) }
     val shakeOffset = remember { Animatable(0f) }
+
+    fun triggerBiometricUnlock() {
+        if (!biometricEnabled) return
+        launchSystemBiometricPrompt(
+            context = context,
+            title = "Unlock Money Ledger",
+            subtitle = "Use your fingerprint to unlock",
+            negativeButtonText = "Use PIN",
+            onAuthenticated = {
+                enteredPin = ""
+                errorMessage = null
+                onUnlocked()
+            },
+            onError = { msg ->
+                errorMessage = msg
+            }
+        )
+    }
+
+    // Automatically offer system fingerprint prompt on lock screen appearance when enabled
+    LaunchedEffect(biometricEnabled) {
+        if (biometricEnabled) {
+            delay(180L)
+            triggerBiometricUnlock()
+        }
+    }
 
     LaunchedEffect(lockoutSeconds) {
         if (lockoutSeconds > 0L) {
@@ -140,7 +225,7 @@ fun PinLockGateScreen(
     fun triggerErrorShake() {
         scope.launch {
             listOf(-18f, 18f, -12f, 12f, -6f, 6f, 0f).forEach { target ->
-                shakeOffset.animateTo(target, animationSpec = tween(36))
+                shakeOffset.animateTo(target, animationSpec = tween(32))
             }
         }
     }
@@ -191,10 +276,10 @@ fun PinLockGateScreen(
             icon = Icons.Filled.Lock,
             iconTint = LedgerCoral,
             title = "Money Ledger Locked",
-            subtitle = if (lockoutSeconds > 0L) {
-                "Locked for ${lockoutSeconds}s due to failed attempts"
-            } else {
-                "Enter your 4-digit PIN to continue"
+            subtitle = when {
+                lockoutSeconds > 0L -> "Locked for ${lockoutSeconds}s due to failed attempts"
+                biometricEnabled -> "Enter your 4-digit PIN or use Fingerprint"
+                else -> "Enter your 4-digit PIN to continue"
             },
             pinLength = enteredPin.length,
             errorMessage = if (lockoutSeconds > 0L) {
@@ -202,6 +287,8 @@ fun PinLockGateScreen(
             } else errorMessage,
             shakeOffsetPx = shakeOffset.value,
             enabled = !isVerifying && lockoutSeconds == 0L,
+            showBiometricAction = biometricEnabled,
+            onBiometricClick = ::triggerBiometricUnlock,
             onDigit = ::handleDigit,
             onBackspace = {
                 if (enteredPin.isNotEmpty() && !isVerifying) {
@@ -232,6 +319,15 @@ fun AppLockSettingsScreen(
     var delaySeconds by remember { mutableIntStateOf(AppLockManager.autoLockDelaySeconds(context)) }
     var showDelayDialog by remember { mutableStateOf(false) }
 
+    val biometricAvailability = remember(isEnabled) { AppLockManager.biometricAvailability(context) }
+    var biometricEnabled by remember(isEnabled) {
+        mutableStateOf(
+            biometricAvailability == BiometricAvailability.AVAILABLE &&
+                AppLockManager.isBiometricPreferenceOn(context)
+        )
+    }
+    var biometricStatusMessage by remember { mutableStateOf<String?>(null) }
+
     BackHandler {
         if (activeFlow != null) {
             activeFlow = null
@@ -249,7 +345,7 @@ fun AppLockSettingsScreen(
 
     AnimatedContent(
         targetState = activeFlow,
-        transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(130)) },
+        transitionSpec = { LedgerMotion.fastFadeTransform() },
         modifier = modifier
             .fillMaxSize()
             .background(LedgerBackground)
@@ -263,6 +359,10 @@ fun AppLockSettingsScreen(
                 onCancel = { activeFlow = null },
                 onCompleted = { nowEnabled, msg ->
                     activeFlow = null
+                    if (!nowEnabled) {
+                        AppLockManager.setBiometricEnabled(context, false)
+                        biometricEnabled = false
+                    }
                     onLockStateChanged(nowEnabled, msg)
                 }
             )
@@ -298,7 +398,7 @@ fun AppLockSettingsScreen(
                             maxLines = 1
                         )
                         Text(
-                            text = "4-digit PIN security",
+                            text = "4-digit PIN & system fingerprint security",
                             style = MaterialTheme.typography.labelSmall,
                             color = LedgerTextSecondary,
                             maxLines = 1
@@ -406,6 +506,109 @@ fun AppLockSettingsScreen(
                                     .background(LedgerSurface)
                             ) {
                                 HorizontalDivider(color = LedgerDivider)
+
+                                // System Fingerprint / Biometric Unlock Toggle Row
+                                val canEnableBiometric = biometricAvailability == BiometricAvailability.AVAILABLE
+                                val bioSubtitle = when (biometricAvailability) {
+                                    BiometricAvailability.AVAILABLE -> if (biometricEnabled) {
+                                        "On • Unlock with your device fingerprint"
+                                    } else {
+                                        "Off • Allow unlocking with system fingerprint"
+                                    }
+                                    BiometricAvailability.NONE_ENROLLED -> "No fingerprint enrolled in device Settings"
+                                    BiometricAvailability.UNAVAILABLE -> "Fingerprint sensor not available on this device"
+                                }
+
+                                fun handleBiometricToggle(wantOn: Boolean) {
+                                    biometricStatusMessage = null
+                                    if (!canEnableBiometric) {
+                                        biometricStatusMessage = bioSubtitle
+                                        return
+                                    }
+                                    if (!wantOn) {
+                                        AppLockManager.setBiometricEnabled(context, false)
+                                        biometricEnabled = false
+                                    } else {
+                                        launchSystemBiometricPrompt(
+                                            context = context,
+                                            title = "Enable Fingerprint Unlock",
+                                            subtitle = "Verify your fingerprint to activate",
+                                            negativeButtonText = "Cancel",
+                                            onAuthenticated = {
+                                                AppLockManager.setBiometricEnabled(context, true)
+                                                biometricEnabled = true
+                                                biometricStatusMessage = null
+                                            },
+                                            onError = { err ->
+                                                biometricStatusMessage = err
+                                            }
+                                        )
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 64.dp)
+                                        .clickable(enabled = canEnableBiometric) {
+                                            handleBiometricToggle(!biometricEnabled)
+                                        }
+                                        .padding(horizontal = 16.dp, vertical = 11.dp)
+                                        .testTag("app_lock_biometric_row"),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(
+                                                (if (biometricEnabled) LedgerGreen else LedgerBlue).copy(alpha = 0.14f)
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Fingerprint,
+                                            contentDescription = "System Fingerprint Unlock",
+                                            tint = if (biometricEnabled) LedgerGreen else LedgerBlue,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(14.dp))
+                                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                        Text(
+                                            text = "Fingerprint Unlock",
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            fontWeight = FontWeight.Medium,
+                                            color = if (canEnableBiometric) LedgerTextPrimary else LedgerTextMuted,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = biometricStatusMessage ?: bioSubtitle,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (biometricStatusMessage != null) LedgerCoral else LedgerTextSecondary,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    Switch(
+                                        checked = biometricEnabled,
+                                        enabled = canEnableBiometric,
+                                        onCheckedChange = ::handleBiometricToggle,
+                                        colors = SwitchDefaults.colors(
+                                            checkedThumbColor = Color.White,
+                                            checkedTrackColor = LedgerGreen,
+                                            uncheckedThumbColor = LedgerTextSecondary,
+                                            uncheckedTrackColor = LedgerSurfaceHighlight
+                                        ),
+                                        modifier = Modifier.testTag("app_lock_biometric_switch")
+                                    )
+                                }
+
+                                HorizontalDivider(
+                                    color = LedgerDivider,
+                                    modifier = Modifier.padding(start = 66.dp)
+                                )
                                 AppLockOptionRow(
                                     icon = Icons.Filled.Pin,
                                     iconTint = LedgerBlue,
@@ -436,7 +639,7 @@ fun AppLockSettingsScreen(
                                     icon = Icons.Filled.Lock,
                                     iconTint = LedgerCoral,
                                     title = "Lock App Now",
-                                    subtitle = "Immediately lock and require PIN",
+                                    subtitle = "Immediately lock and require PIN or Fingerprint",
                                     trailingValue = null,
                                     onClick = onLockNow,
                                     modifier = Modifier.testTag("app_lock_lock_now_row")
@@ -446,7 +649,7 @@ fun AppLockSettingsScreen(
                         }
 
                         Text(
-                            text = "Your PIN is stored locally using a salted cryptographic hash and is never saved in plain text. After 5 failed attempts, entry pauses briefly for 30 seconds.",
+                            text = "Your PIN is stored locally using a salted cryptographic hash and is never saved in plain text. When Fingerprint Unlock is active, you can unlock with your device's system biometric sensor or fall back to your PIN anytime.",
                             style = MaterialTheme.typography.bodySmall,
                             color = LedgerTextMuted,
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)
@@ -557,7 +760,7 @@ private fun PinSetupFlowScreen(
     fun triggerErrorShake() {
         scope.launch {
             listOf(-18f, 18f, -12f, 12f, -6f, 6f, 0f).forEach { target ->
-                shakeOffset.animateTo(target, animationSpec = tween(36))
+                shakeOffset.animateTo(target, animationSpec = tween(32))
             }
         }
     }
@@ -718,6 +921,8 @@ private fun PinSetupFlowScreen(
                 } else errorMessage,
                 shakeOffsetPx = shakeOffset.value,
                 enabled = !isProcessing && !(step == PinFlowStep.VERIFY_CURRENT && lockoutSeconds > 0L),
+                showBiometricAction = false,
+                onBiometricClick = {},
                 onDigit = ::handleDigit,
                 onBackspace = {
                     if (enteredPin.isNotEmpty() && !isProcessing) {
@@ -746,6 +951,8 @@ private fun PinPadScaffold(
     errorMessage: String?,
     shakeOffsetPx: Float,
     enabled: Boolean,
+    showBiometricAction: Boolean,
+    onBiometricClick: () -> Unit,
     onDigit: (Char) -> Unit,
     onBackspace: () -> Unit,
     onClear: () -> Unit
@@ -753,130 +960,157 @@ private fun PinPadScaffold(
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 24.dp, vertical = 16.dp),
+            .padding(horizontal = 24.dp, vertical = 20.dp),
         contentAlignment = Alignment.Center
     ) {
-        val compactHeight = maxHeight < 580.dp
-        val keySize: Dp = if (compactHeight) 60.dp else 68.dp
-        val keyGap: Dp = if (compactHeight) 10.dp else 14.dp
+        val availWidth = maxWidth.coerceAtMost(420.dp)
+        val availHeight = maxHeight
+        val isCompact = availHeight < 580.dp
+
+        // Scale keys generously so the keypad fills the screen cleanly without cramped gaps
+        val maxKeyFromWidth = (availWidth - 48.dp) / 3f
+        val maxKeyFromHeight = (availHeight * 0.56f - 54.dp) / 4f
+        val keySize: Dp = minOf(maxKeyFromWidth, maxKeyFromHeight).coerceIn(66.dp, 90.dp)
+        val colGap: Dp = ((availWidth - keySize * 3f) / 2f).coerceIn(16.dp, 32.dp)
+        val rowGap: Dp = if (isCompact) 12.dp else 18.dp
+        val badgeSize: Dp = if (isCompact) 62.dp else 78.dp
+        val iconSize: Dp = if (isCompact) 30.dp else 38.dp
+        val dotSize: Dp = if (isCompact) 18.dp else 22.dp
 
         Column(
-            modifier = Modifier.widthIn(max = 320.dp).fillMaxWidth(),
+            modifier = Modifier
+                .widthIn(max = 420.dp)
+                .fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            verticalArrangement = Arrangement.SpaceBetween
         ) {
-            Box(
+            // Upper Hero Header & PIN Dots
+            Column(
                 modifier = Modifier
-                    .size(if (compactHeight) 52.dp else 60.dp)
-                    .clip(CircleShape)
-                    .background(iconTint.copy(alpha = 0.14f))
-                    .border(1.dp, iconTint.copy(alpha = 0.4f), CircleShape),
-                contentAlignment = Alignment.Center
+                    .weight(1f)
+                    .fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
             ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = iconTint,
-                    modifier = Modifier.size(if (compactHeight) 24.dp else 28.dp)
+                Box(
+                    modifier = Modifier
+                        .size(badgeSize)
+                        .clip(CircleShape)
+                        .background(iconTint.copy(alpha = 0.14f))
+                        .border(1.5.dp, iconTint.copy(alpha = 0.45f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = iconTint,
+                        modifier = Modifier.size(iconSize)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(if (isCompact) 14.dp else 22.dp))
+
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontSize = if (isCompact) 22.sp else 26.sp,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = LedgerTextPrimary,
+                    textAlign = TextAlign.Center
                 )
-            }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = if (isCompact) 13.5.sp else 15.sp
+                    ),
+                    color = LedgerTextSecondary,
+                    textAlign = TextAlign.Center
+                )
 
-            Spacer(modifier = Modifier.height(if (compactHeight) 12.dp else 16.dp))
+                Spacer(modifier = Modifier.height(if (isCompact) 22.dp else 32.dp))
 
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = LedgerTextPrimary,
-                textAlign = TextAlign.Center
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = LedgerTextSecondary,
-                textAlign = TextAlign.Center
-            )
+                // 4-Digit PIN Indicator Dots
+                Row(
+                    modifier = Modifier
+                        .offset { IntOffset(shakeOffsetPx.roundToInt(), 0) }
+                        .testTag("pin_dots_indicator"),
+                    horizontalArrangement = Arrangement.spacedBy(22.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    repeat(4) { index ->
+                        val filled = index < pinLength
+                        val dotColor by animateColorAsState(
+                            targetValue = when {
+                                errorMessage != null && pinLength == 0 -> LedgerCoral.copy(alpha = 0.45f)
+                                filled -> LedgerCoral
+                                else -> Color.Transparent
+                            },
+                            animationSpec = LedgerMotion.microTween(100),
+                            label = "pin_dot_color_$index"
+                        )
+                        val dotScale by animateFloatAsState(
+                            targetValue = if (filled) 1.18f else 1f,
+                            animationSpec = LedgerMotion.quickSpring(),
+                            label = "pin_dot_scale_$index"
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(dotSize)
+                                .scale(dotScale)
+                                .clip(CircleShape)
+                                .background(dotColor)
+                                .border(
+                                    width = 2.dp,
+                                    color = when {
+                                        errorMessage != null && pinLength == 0 -> LedgerCoral
+                                        filled -> LedgerCoral
+                                        else -> LedgerBorder
+                                    },
+                                    shape = CircleShape
+                                )
+                        )
+                    }
+                }
 
-            Spacer(modifier = Modifier.height(if (compactHeight) 18.dp else 24.dp))
-
-            // 4-Digit PIN Indicator Dots
-            Row(
-                modifier = Modifier
-                    .offset { IntOffset(shakeOffsetPx.roundToInt(), 0) }
-                    .testTag("pin_dots_indicator"),
-                horizontalArrangement = Arrangement.spacedBy(18.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                repeat(4) { index ->
-                    val filled = index < pinLength
-                    val dotColor by animateColorAsState(
-                        targetValue = when {
-                            errorMessage != null && pinLength == 0 -> LedgerCoral.copy(alpha = 0.45f)
-                            filled -> LedgerCoral
-                            else -> Color.Transparent
-                        },
-                        animationSpec = tween(140),
-                        label = "pin_dot_color_$index"
-                    )
-                    val dotScale by animateFloatAsState(
-                        targetValue = if (filled) 1.15f else 1f,
-                        animationSpec = tween(140),
-                        label = "pin_dot_scale_$index"
-                    )
-                    Box(
-                        modifier = Modifier
-                            .size(16.dp)
-                            .scale(dotScale)
-                            .clip(CircleShape)
-                            .background(dotColor)
-                            .border(
-                                width = 1.5.dp,
-                                color = when {
-                                    errorMessage != null && pinLength == 0 -> LedgerCoral
-                                    filled -> LedgerCoral
-                                    else -> LedgerBorder
-                                },
-                                shape = CircleShape
-                            )
-                    )
+                // Fixed-height feedback line so keypad stays anchored
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(if (isCompact) 36.dp else 44.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (errorMessage != null) {
+                        Text(
+                            text = errorMessage,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            color = LedgerCoral,
+                            textAlign = TextAlign.Center,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.testTag("pin_error_text")
+                        )
+                    }
                 }
             }
 
-            // Fixed-height error message line so keypad never jumps
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(if (compactHeight) 30.dp else 36.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                if (errorMessage != null) {
-                    Text(
-                        text = errorMessage,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = LedgerCoral,
-                        textAlign = TextAlign.Center,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.testTag("pin_error_text")
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(if (compactHeight) 8.dp else 14.dp))
-
-            // 3x4 Numeric Keypad
+            // Lower Full-Width Proportional 3x4 Numeric Keypad
             val rows = listOf(
                 listOf('1', '2', '3'),
                 listOf('4', '5', '6'),
                 listOf('7', '8', '9')
             )
             Column(
-                verticalArrangement = Arrangement.spacedBy(keyGap),
+                modifier = Modifier.padding(bottom = if (isCompact) 4.dp else 12.dp),
+                verticalArrangement = Arrangement.spacedBy(rowGap),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 rows.forEach { rowDigits ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(keyGap + 8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(colGap)) {
                         rowDigits.forEach { digit ->
                             PinDigitKey(
                                 label = digit.toString(),
@@ -889,23 +1123,48 @@ private fun PinPadScaffold(
                     }
                 }
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(keyGap + 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(colGap),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Clear button
-                    Box(
-                        modifier = Modifier
-                            .size(keySize)
-                            .clip(CircleShape)
-                            .clickable(enabled = enabled && pinLength > 0, onClick = onClear)
-                            .testTag("pin_key_clear"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "Clear",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = if (enabled && pinLength > 0) LedgerTextSecondary else LedgerTextMuted
-                        )
+                    // Bottom-left: Fingerprint button when enabled & PIN empty, otherwise Clear
+                    if (showBiometricAction && pinLength == 0) {
+                        Surface(
+                            shape = CircleShape,
+                            color = LedgerGreen.copy(alpha = 0.14f),
+                            border = BorderStroke(1.2.dp, LedgerGreen.copy(alpha = 0.45f)),
+                            modifier = Modifier
+                                .size(keySize)
+                                .clip(CircleShape)
+                                .clickable(onClick = onBiometricClick)
+                                .testTag("pin_key_biometric")
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Filled.Fingerprint,
+                                    contentDescription = "Unlock with fingerprint",
+                                    tint = LedgerGreen,
+                                    modifier = Modifier.size((keySize.value * 0.44f).dp)
+                                )
+                            }
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(keySize)
+                                .clip(CircleShape)
+                                .clickable(enabled = enabled && pinLength > 0, onClick = onClear)
+                                .testTag("pin_key_clear"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Clear",
+                                style = MaterialTheme.typography.titleSmall.copy(
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Medium
+                                ),
+                                color = if (enabled && pinLength > 0) LedgerTextSecondary else LedgerTextMuted
+                            )
+                        }
                     }
                     PinDigitKey(
                         label = "0",
@@ -927,7 +1186,7 @@ private fun PinPadScaffold(
                             imageVector = Icons.AutoMirrored.Filled.Backspace,
                             contentDescription = "Delete digit",
                             tint = if (enabled && pinLength > 0) LedgerTextPrimary else LedgerTextMuted,
-                            modifier = Modifier.size(22.dp)
+                            modifier = Modifier.size(28.dp)
                         )
                     }
                 }
@@ -944,6 +1203,7 @@ private fun PinDigitKey(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val digitFontSp = (keySize.value * 0.36f).coerceIn(25f, 32f).sp
     Surface(
         shape = CircleShape,
         color = LedgerSurfaceElevated,
@@ -956,8 +1216,8 @@ private fun PinDigitKey(
         Box(contentAlignment = Alignment.Center) {
             Text(
                 text = label,
-                style = MaterialTheme.typography.headlineSmall.copy(
-                    fontSize = 24.sp,
+                style = MaterialTheme.typography.headlineMedium.copy(
+                    fontSize = digitFontSp,
                     fontWeight = FontWeight.Medium
                 ),
                 color = if (enabled) LedgerTextPrimary else LedgerTextMuted

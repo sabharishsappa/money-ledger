@@ -750,12 +750,6 @@ private fun TagDateGroupHeader(
         Calendar.SUNDAY -> LedgerCoral
         else -> LedgerSurfaceHighlight
     }
-    val dayNetRounded = group.dayNet.roundToLong()
-    val dayNetColor = when {
-        dayNetRounded > 0L -> LedgerBlue
-        dayNetRounded < 0L -> LedgerCoral
-        else -> LedgerTextSecondary
-    }
 
     Column(modifier = modifier.background(LedgerSurface)) {
         Row(
@@ -795,16 +789,6 @@ private fun TagDateGroupHeader(
                 text = monthYear,
                 style = MaterialTheme.typography.labelSmall,
                 color = LedgerTextMuted,
-                maxLines = 1,
-                softWrap = false
-            )
-
-            Spacer(modifier = Modifier.weight(1f).widthIn(min = 8.dp))
-
-            Text(
-                text = formatSignedLedgerAmount(group.dayNet, symbol, showPlus = true),
-                style = TabularAmountStyle.copy(fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold),
-                color = dayNetColor,
                 maxLines = 1,
                 softWrap = false
             )

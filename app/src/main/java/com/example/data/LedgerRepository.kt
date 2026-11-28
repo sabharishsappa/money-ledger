@@ -685,27 +685,76 @@ class LedgerRepository(
         }
     }
 
+    override suspend fun renameTagging(userId: String, oldTag: String, newTag: String): Result<Int> {
+        val cleanOld = oldTag.trim()
+        val cleanNew = newTag.trim().take(60)
+        if (cleanOld.isEmpty() || cleanNew.isEmpty()) {
+            return Result.failure(IllegalArgumentException("Tagging name cannot be empty"))
+        }
+        val path = "users/$userId/transactions"
+        return try {
+            val uid = requireUserId(userId)
+            val snap = transactionsCol(uid).get().await()
+            val batch = db.batch()
+            var updated = 0
+            snap.documents.forEach { doc ->
+                val updates = mutableMapOf<String, Any>()
+                val primary = doc.getString("tagging")?.trim()
+                val toTag = doc.getString("toTagging")?.trim()
+                if (primary != null && primary.equals(cleanOld, ignoreCase = true)) {
+                    updates["tagging"] = cleanNew
+                }
+                if (toTag != null && toTag.equals(cleanOld, ignoreCase = true)) {
+                    updates["toTagging"] = cleanNew
+                }
+                if (updates.isNotEmpty()) {
+                    updates["updatedAt"] = FieldValue.serverTimestamp()
+                    batch.update(doc.reference, updates)
+                    updated++
+                }
+            }
+            if (updated > 0) batch.commit().await()
+            Result.success(updated)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
+            Result.failure(e)
+        }
+    }
+
     // --- Budgets ---
 
-    override suspend fun saveBudget(userId: String, categoryId: String, monthlyLimit: Double): Result<Unit> {
+    override suspend fun saveBudget(
+        userId: String,
+        categoryId: String,
+        monthlyLimit: Double,
+        subcategory: String?
+    ): Result<Unit> {
         if (categoryId.isBlank()) return Result.failure(IllegalArgumentException("Category required"))
         val safeLimit = monthlyLimit.coerceAtLeast(0.0)
-        val docId = "budget_$categoryId"
+        val cleanSub = subcategory?.trim()?.take(60)?.takeIf { it.isNotEmpty() }
+        val docId = Budget.buildDocId(categoryId, cleanSub)
         val path = "users/$userId/budgets/$docId"
         return try {
             val uid = requireUserId(userId)
             val docRef = budgetsCol(uid).document(docId)
             val existingSnap = docRef.get().await()
             if (existingSnap.exists()) {
-                docRef.update(
-                    mapOf(
-                        "categoryId" to categoryId,
-                        "monthlyLimit" to safeLimit,
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                ).await()
+                val updates = mutableMapOf<String, Any?>(
+                    "categoryId" to categoryId,
+                    "subcategory" to cleanSub,
+                    "monthlyLimit" to safeLimit,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                docRef.update(updates).await()
             } else {
-                val model = Budget(userId = uid, categoryId = categoryId, monthlyLimit = safeLimit)
+                val model = Budget(
+                    userId = uid,
+                    categoryId = categoryId,
+                    subcategory = cleanSub,
+                    monthlyLimit = safeLimit
+                )
                 docRef.set(model.toCreateMap(uid)).await()
             }
             Result.success(Unit)

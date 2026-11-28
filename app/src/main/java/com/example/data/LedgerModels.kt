@@ -38,6 +38,23 @@ enum class CategoryType {
     }
 }
 
+enum class CustomRepeatUnit(
+    val label: String,
+    val singular: String,
+    val compactPlural: String,
+    val compactSingular: String
+) {
+    DAYS("Days", "Day", "Days", "Day"),
+    WEEKS("Weeks", "Week", "Wks", "Wk"),
+    MONTHS("Months", "Month", "Mos", "Mo"),
+    YEARS("Years", "Year", "Yrs", "Yr");
+
+    companion object {
+        fun safeValueOf(raw: String?): CustomRepeatUnit =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: MONTHS
+    }
+}
+
 enum class RepeatFrequency(
     val label: String,
     val description: String,
@@ -53,7 +70,8 @@ enum class RepeatFrequency(
     SPECIFIC_DATE_OF_MONTH("Specific Date of Month", "Choose day 1–31 of each month", "Date / Mo."),
     QUARTERLY("Quarterly", "Every 3 months", "Quarterly"),
     HALF_YEARLY("Half-Yearly", "Every 6 months", "Half-Yr"),
-    YEARLY("Yearly", "Repeats once a year", "Yearly");
+    YEARLY("Yearly", "Repeats once a year", "Yearly"),
+    CUSTOM("Custom", "Choose number & unit (Days, Weeks, Months, Years)", "Custom");
 
     companion object {
         fun safeValueOf(raw: String?): RepeatFrequency {
@@ -63,22 +81,48 @@ enum class RepeatFrequency(
         }
 
         fun parseDayOfMonth(raw: String?): Int? {
-            if (raw.isNullOrBlank() || !raw.contains(':')) return null
+            if (raw.isNullOrBlank() || !raw.startsWith("${SPECIFIC_DATE_OF_MONTH.name}:")) return null
             return raw.substringAfter(':').toIntOrNull()?.coerceIn(1, 31)
         }
 
-        fun encode(freq: RepeatFrequency, dayOfMonth: Int? = null): String {
-            return if (freq == SPECIFIC_DATE_OF_MONTH) {
-                val day = (dayOfMonth ?: 1).coerceIn(1, 31)
-                "${freq.name}:$day"
-            } else {
-                freq.name
+        fun parseCustomRepeat(raw: String?): Pair<Int, CustomRepeatUnit>? {
+            if (raw.isNullOrBlank() || !raw.startsWith("${CUSTOM.name}:")) return null
+            val parts = raw.split(':')
+            if (parts.size < 3) return null
+            val count = parts[1].toIntOrNull()?.coerceIn(1, 365) ?: return null
+            val unit = CustomRepeatUnit.safeValueOf(parts[2])
+            return count to unit
+        }
+
+        fun encode(
+            freq: RepeatFrequency,
+            dayOfMonth: Int? = null,
+            customCount: Int? = null,
+            customUnit: CustomRepeatUnit? = null
+        ): String {
+            return when (freq) {
+                SPECIFIC_DATE_OF_MONTH -> {
+                    val day = (dayOfMonth ?: 1).coerceIn(1, 31)
+                    "${freq.name}:$day"
+                }
+                CUSTOM -> {
+                    val count = (customCount ?: 1).coerceIn(1, 365)
+                    val unit = customUnit ?: CustomRepeatUnit.MONTHS
+                    "${freq.name}:$count:${unit.name}"
+                }
+                else -> freq.name
             }
         }
 
         fun normalize(raw: String?): String {
             val freq = safeValueOf(raw)
-            return encode(freq, parseDayOfMonth(raw))
+            val custom = parseCustomRepeat(raw)
+            return encode(
+                freq = freq,
+                dayOfMonth = parseDayOfMonth(raw),
+                customCount = custom?.first,
+                customUnit = custom?.second
+            )
         }
 
         fun ordinalDay(day: Int): String {
@@ -95,21 +139,33 @@ enum class RepeatFrequency(
 
         fun formatDisplayLabel(raw: String?): String {
             val freq = safeValueOf(raw)
-            return if (freq == SPECIFIC_DATE_OF_MONTH) {
-                val day = parseDayOfMonth(raw) ?: 1
-                "Every ${ordinalDay(day)} of Month"
-            } else {
-                freq.label
+            return when (freq) {
+                SPECIFIC_DATE_OF_MONTH -> {
+                    val day = parseDayOfMonth(raw) ?: 1
+                    "Every ${ordinalDay(day)} of Month"
+                }
+                CUSTOM -> {
+                    val (count, unit) = parseCustomRepeat(raw) ?: (1 to CustomRepeatUnit.MONTHS)
+                    val unitWord = if (count == 1) unit.singular else unit.label
+                    "Every $count $unitWord"
+                }
+                else -> freq.label
             }
         }
 
         fun formatCompactLabel(raw: String?): String {
             val freq = safeValueOf(raw)
-            return if (freq == SPECIFIC_DATE_OF_MONTH) {
-                val day = parseDayOfMonth(raw) ?: 1
-                "${ordinalDay(day)} / Mo."
-            } else {
-                freq.compactLabel
+            return when (freq) {
+                SPECIFIC_DATE_OF_MONTH -> {
+                    val day = parseDayOfMonth(raw) ?: 1
+                    "${ordinalDay(day)} / Mo."
+                }
+                CUSTOM -> {
+                    val (count, unit) = parseCustomRepeat(raw) ?: (1 to CustomRepeatUnit.MONTHS)
+                    val unitShort = if (count == 1) unit.compactSingular else unit.compactPlural
+                    "$count $unitShort"
+                }
+                else -> freq.compactLabel
             }
         }
     }
@@ -342,6 +398,7 @@ data class LedgerTransaction(
     fun txType(): TransactionType = TransactionType.safeValueOf(type)
     fun repeat(): RepeatFrequency = RepeatFrequency.safeValueOf(repeatFrequency)
     fun repeatDayOfMonth(): Int? = RepeatFrequency.parseDayOfMonth(repeatFrequency)
+    fun customRepeat(): Pair<Int, CustomRepeatUnit>? = RepeatFrequency.parseCustomRepeat(repeatFrequency)
     fun repeatLabel(): String = RepeatFrequency.formatDisplayLabel(repeatFrequency)
     fun normalizedRepeatFrequency(): String = RepeatFrequency.normalize(repeatFrequency)
     fun effectiveTagging(): String? =
@@ -389,17 +446,35 @@ data class Budget(
     @DocumentId val id: String = "",
     val userId: String = "",
     val categoryId: String = "",
+    val subcategory: String? = null,
     val monthlyLimit: Double = 0.0,
     val createdAt: Timestamp? = null,
     val updatedAt: Timestamp? = null
 ) {
-    fun toCreateMap(uid: String): Map<String, Any> = mapOf(
-        "userId" to uid,
-        "categoryId" to categoryId,
-        "monthlyLimit" to monthlyLimit.coerceAtLeast(0.0),
-        "createdAt" to FieldValue.serverTimestamp(),
-        "updatedAt" to FieldValue.serverTimestamp()
-    )
+    fun normalizedSubcategory(): String? = subcategory?.trim()?.takeIf { it.isNotEmpty() }
+    fun isLedgerBudget(): Boolean = normalizedSubcategory() != null
+
+    fun toCreateMap(uid: String): Map<String, Any> {
+        val raw = mutableMapOf<String, Any?>(
+            "userId" to uid,
+            "categoryId" to categoryId,
+            "subcategory" to normalizedSubcategory()?.take(60),
+            "monthlyLimit" to monthlyLimit.coerceAtLeast(0.0),
+            "createdAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        @Suppress("UNCHECKED_CAST")
+        return raw.filterValues { it != null } as Map<String, Any>
+    }
+
+    companion object {
+        fun buildDocId(categoryId: String, subcategory: String? = null): String {
+            val cleanSub = subcategory?.trim()?.takeIf { it.isNotEmpty() } ?: return "budget_$categoryId"
+            val slug = cleanSub.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_').take(40)
+            val hash = cleanSub.lowercase().hashCode().toUInt().toString(16)
+            return "budget_${categoryId}_${slug}_$hash"
+        }
+    }
 }
 
 @Keep
